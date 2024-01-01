@@ -65,8 +65,17 @@ public class DemoProcessorJob : IJob
 
         var downloadResponse = await httpClient.GetAsync(demoEntry.Url, cancellationToken);
 
+        var downloadSizeBytes = downloadResponse.Content.Headers.ContentLength;
+
         Console.WriteLine("Downloading demo: " +
-                          downloadResponse.Content.Headers.ContentLength.GetValueOrDefault().Bytes());
+                          downloadSizeBytes.GetValueOrDefault().Bytes());
+
+        // Skip if 1 MB - probably corrupted
+        if (downloadSizeBytes < 1 * 1024 * 1024)
+        {
+            Console.WriteLine("Skipping demo (<1MB - probably corrupt): " + demoId);
+            return;
+        }
 
         await using var downloadStream = await downloadResponse.Content.ReadAsStreamAsync(cancellationToken);
 
@@ -92,7 +101,7 @@ public class DemoProcessorJob : IJob
         {
             DemoId = demoEntry.Id,
 
-            DownloadSize = downloadResponse.Content.Headers.ContentLength ?? 0,
+            DownloadSize = downloadSizeBytes ?? 0,
             ExtractedFileSize = new FileInfo(filePath).Length,
 
             IntervalPerTick = output.IntervalPerTick,
