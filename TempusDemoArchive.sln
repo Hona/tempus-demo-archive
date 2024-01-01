@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TempusDemoArchive.Persistence", "TempusDemoArchive.Persistence\TempusDemoArchive.Persistence.csproj", "{5B0F2076-DFCE-471D-A082-26791602E58B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TempusDemoArchive.Jobs", "TempusDemoArchive.Jobs\TempusDemoArchive.Jobs.csproj", "{A9A9EDA9-3096-4788-AE3C-6E35DEE20913}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5B0F2076-DFCE-471D-A082-26791602E58B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B0F2076-DFCE-471D-A082-26791602E58B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B0F2076-DFCE-471D-A082-26791602E58B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B0F2076-DFCE-471D-A082-26791602E58B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9A9EDA9-3096-4788-AE3C-6E35DEE20913}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9A9EDA9-3096-4788-AE3C-6E35DEE20913}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9A9EDA9-3096-4788-AE3C-6E35DEE20913}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9A9EDA9-3096-4788-AE3C-6E35DEE20913}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
