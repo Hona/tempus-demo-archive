@@ -1,4 +1,6 @@
-﻿#define PREDETERMINDED_JOB
+﻿#if DEBUG
+#define PREDETERMINDED_JOB
+#endif
 
 using System.Diagnostics;
 using TempusDemoArchive.Jobs;
