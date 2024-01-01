@@ -23,7 +23,8 @@ await using (var db = new ArchiveDbContext())
 var jobs = new IJob[]
 {
     new IngestJobList(),
-    new DemoProcessorJob()
+    new DemoProcessorJob(),
+    new InfoJob()
 };
 
 // User select a job
