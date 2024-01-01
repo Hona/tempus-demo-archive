@@ -7,6 +7,9 @@ namespace TempusDemoArchive.Persistence;
 public class ArchiveDbContext : DbContext
 {
     public DbSet<Demo> Demos { get; set; }
+    public DbSet<Stv> Stvs { get; set; }
+    public DbSet<StvChat> StvChats { get; set; }
+    public DbSet<StvUser> StvUsers { get; set; }
     
     // The following configures EF to create a Sqlite database file in the
     // special "local" folder for your platform.
