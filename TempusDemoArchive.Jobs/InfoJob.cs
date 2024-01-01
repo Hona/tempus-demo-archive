@@ -1,4 +1,6 @@
-﻿namespace TempusDemoArchive.Jobs;
+﻿using Humanizer;
+
+namespace TempusDemoArchive.Jobs;
 
 public class InfoJob : IJob
 {
@@ -11,5 +13,14 @@ public class InfoJob : IJob
         
         Console.WriteLine($"Processed: {processedCount}");
         Console.WriteLine($"Unprocessed: {unprocessedCount}");
+        
+        var totalDownloadedBytes = db.Stvs.Sum(x => x.DownloadSize);
+        var totalProcessedBytes = db.Stvs.Sum(x => x.ExtractedFileSize);
+        
+        Console.WriteLine($"Total Downloaded: {totalDownloadedBytes.Bytes()}");
+        Console.WriteLine($"Total Processed: {totalProcessedBytes.Bytes()}");
+        
+        var databaseSize = new FileInfo(ArchivePath.Db).Length;
+        Console.WriteLine($"Database Size: {databaseSize.Bytes()}");
     }
 }
