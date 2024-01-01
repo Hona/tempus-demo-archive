@@ -28,7 +28,7 @@ public class DemoProcessorJob : IJob
             {
                 Console.WriteLine($"Processing demo {counter} (+- {MaxConcurrentTasks}) of {unprocessedDemos} (ID: {demoEntry.Id})");
 
-                await ProcessDemoAsync(demoEntry, httpClient, db, cancellationToken);
+                await ProcessDemoAsync(demoEntry, httpClient, cancellationToken);
 
                 counter++;
             }
@@ -46,10 +46,12 @@ public class DemoProcessorJob : IJob
         await Task.WhenAll(tasks);
     }
 
-    private async Task ProcessDemoAsync(Demo demoEntry, HttpClient httpClient, ArchiveDbContext db,
+    private async Task ProcessDemoAsync(Demo demoEntry, HttpClient httpClient,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
+        
+        await using var db = new ArchiveDbContext();
 
         var filePath = ArchivePath.GetDemoFilePath(demoEntry.Id);
 
