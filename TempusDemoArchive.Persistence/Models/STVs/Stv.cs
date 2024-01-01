@@ -8,6 +8,10 @@ public class Stv
     public int? StartTick { get; set; }
     public double? IntervalPerTick { get; set; }
     
+    // Custom
+    public long DownloadSize { get; set; }
+    public long ExtractedFileSize { get; set; }
+    
     public virtual ICollection<StvChat> Chats { get; set; }
     public virtual ICollection<StvUser> Users { get; set; }
     public virtual Demo Demo { get; set; }

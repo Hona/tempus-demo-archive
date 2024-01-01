@@ -1,4 +1,6 @@
-﻿using System.IO.Compression;
+﻿using System.Diagnostics;
+using System.IO.Compression;
+using Humanizer;
 using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs.StvProcessor;
@@ -10,31 +12,47 @@ public class DemoProcessorJob : IJob
         await using var db = new ArchiveDbContext();
         var httpClient = new HttpClient();
 
-        foreach (var demoEntry in db.Demos.Where(x => !x.StvProcessed)
-                     .OrderBy(x => x.Date)) // Oldest -> newest
+        var unprocessedDemos = db.Demos.Count(x => !x.StvProcessed);
+
+        var counter = 1;
+        foreach (var demoEntry in db.Demos.Where(x => !x.StvProcessed))
         {
+            var stopwatch = Stopwatch.StartNew();
+            Console.WriteLine($"Processing demo {counter} of {unprocessedDemos} (ID: {demoEntry.Id})");
+            
             var filePath = ArchivePath.GetDemoFilePath(demoEntry.Id);
             
-            var downloadStream = await httpClient.GetStreamAsync(demoEntry.Url, cancellationToken);
+            var downloadResponse = await httpClient.GetAsync(demoEntry.Url, cancellationToken);
+
+            Console.WriteLine("Downloading demo: " + downloadResponse.Content.Headers.ContentLength.GetValueOrDefault().Bytes());
+            
+            await using var downloadStream = await downloadResponse.Content.ReadAsStreamAsync(cancellationToken);
+            
             using (var zip = new ZipArchive(downloadStream) )
             {
                 var entry = zip.Entries.First(x => x.FullName.EndsWith(".dem"));
 
                 using (var sr = new StreamReader(entry.Open()))
                 {
-                    
                     await using (var sw = File.OpenWrite(filePath))
                     {
+                        Console.WriteLine("Extracting demo: " + entry.Length.Bytes());
                         await sr.BaseStream.CopyToAsync(sw, cancellationToken);
                     }
                 }
             }
-
+            
+            Console.WriteLine("Extracting STV data");
             var output = StvParser.ExtractStvData(filePath);
 
+            Console.WriteLine("Mapping to DB model");
             var stv = new Stv
             {
                 DemoId = demoEntry.Id,
+                
+                DownloadSize = downloadResponse.Content.Headers.ContentLength ?? 0,
+                ExtractedFileSize = new FileInfo(filePath).Length,
+                
                 IntervalPerTick = output.IntervalPerTick,
                 StartTick = output.StartTick,
                 Header = new StvHeader
@@ -75,9 +93,16 @@ public class DemoProcessorJob : IJob
             db.Add(stv);
             demoEntry.StvProcessed = true;
             
+            Console.WriteLine("Deleting demo file");
+            
             File.Delete(filePath);
-
+            
+            Console.WriteLine("Saving changes");
+            
             await db.SaveChangesAsync(cancellationToken);
+            Console.WriteLine("Done. Took " + stopwatch.Elapsed.Humanize(2) + "\n");
+            
+            counter++;
         }
     }
 }
