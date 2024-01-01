@@ -28,7 +28,7 @@ public class DemoProcessorJob : IJob
             {
                 Console.WriteLine($"Processing demo {counter} (+- {MaxConcurrentTasks}) of {unprocessedDemos} (ID: {demoEntry.Id})");
 
-                await ProcessDemoAsync(demoEntry, httpClient, cancellationToken);
+                await ProcessDemoAsync(demoEntry.Id, httpClient, cancellationToken);
 
                 counter++;
             }
@@ -46,14 +46,22 @@ public class DemoProcessorJob : IJob
         await Task.WhenAll(tasks);
     }
 
-    private async Task ProcessDemoAsync(Demo demoEntry, HttpClient httpClient,
+    private async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         
         await using var db = new ArchiveDbContext();
 
-        var filePath = ArchivePath.GetDemoFilePath(demoEntry.Id);
+        var demoEntry = await db.Demos.FindAsync(demoId, cancellationToken);
+        
+        if (demoEntry is null)
+        {
+            Console.WriteLine("Demo not found in database: " + demoId);
+            return;
+        }
+
+        var filePath = ArchivePath.GetDemoFilePath(demoId);
 
         var downloadResponse = await httpClient.GetAsync(demoEntry.Url, cancellationToken);
 

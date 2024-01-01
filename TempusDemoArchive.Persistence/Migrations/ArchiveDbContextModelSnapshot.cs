@@ -57,7 +57,7 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                     b.HasKey("DemoId");
 
-                    b.ToTable("Stv");
+                    b.ToTable("Stvs");
                 });
 
             modelBuilder.Entity("TempusDemoArchive.Persistence.Models.STVs.StvChat", b =>
@@ -85,7 +85,7 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                     b.HasKey("DemoId", "Index");
 
-                    b.ToTable("StvChat");
+                    b.ToTable("StvChats");
                 });
 
             modelBuilder.Entity("TempusDemoArchive.Persistence.Models.STVs.StvUser", b =>
@@ -110,7 +110,7 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                     b.HasKey("DemoId", "UserId");
 
-                    b.ToTable("StvUser");
+                    b.ToTable("StvUsers");
                 });
 
             modelBuilder.Entity("TempusDemoArchive.Persistence.Models.STVs.Stv", b =>
@@ -166,7 +166,7 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                             b1.HasKey("StvDemoId");
 
-                            b1.ToTable("Stv");
+                            b1.ToTable("Stvs");
 
                             b1.WithOwner()
                                 .HasForeignKey("StvDemoId");
