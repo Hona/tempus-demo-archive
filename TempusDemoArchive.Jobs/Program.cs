@@ -25,7 +25,8 @@ var jobs = new IJob[]
     new IngestJobList(),
     new DemoProcessorJob(),
     new InfoJob(),
-    new FixupProcessedItemsJob()
+    new FixupProcessedItemsJob(),
+    new ListUnprocessedDemos(),
 };
 
 // User select a job
