@@ -1,8 +1,7 @@
-﻿#if DEBUG
-#define PREDETERMINDED_JOB
-#endif
+﻿
 
 using System.Diagnostics;
+using Humanizer;
 using TempusDemoArchive.Jobs;
 using TempusDemoArchive.Jobs.StvProcessor;
 
@@ -27,6 +26,12 @@ var jobs = new IJob[]
     new InfoJob(),
     new FixupProcessedItemsJob(),
     new ListUnprocessedDemos(),
+    new TESTINGWrHistoryJob(),
+    new ExportAllChatLogsFromMap(),
+    new MapNamesThatContain(),
+    new FirstBrazilWr(),
+    new ExportAllChatLogsFromUrls(),
+    new FindExactMessage()
 };
 
 // User select a job
@@ -36,13 +41,8 @@ for (var i = 0; i < jobs.Length; i++)
     Console.WriteLine($"{i + 1}. {jobs[i].GetType().Name}");
 }
 
-#if PREDETERMINDED_JOB
-var job = jobs[1];
-#else
 var jobIndex = int.Parse(Console.ReadLine() ?? "1") - 1;
 var job = jobs[jobIndex];
-#endif
-
 
 // Get console cancellationtoken
 var cts = new CancellationTokenSource();
@@ -58,4 +58,4 @@ var stopwatch = Stopwatch.StartNew();
 await job.ExecuteAsync(cts.Token);
 stopwatch.Stop();
 
-Console.WriteLine("Done!");
+Console.WriteLine("Done! Took " + stopwatch.Elapsed.Humanize(2));

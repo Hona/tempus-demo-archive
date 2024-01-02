@@ -45,5 +45,12 @@ public class ArchiveDbContext : DbContext
             .HasOne(stv => stv.Demo)
             .WithOne() // Replace with the navigation property in Demo if there is one
             .HasForeignKey<Stv>(stv => stv.DemoId);
+        
+        // Configure Demo and Stv relationship
+        // This assumes that each Stv is related to exactly one Demo and vice versa.
+        modelBuilder.Entity<Demo>()
+            .HasOne(demo => demo.Stv)
+            .WithOne(stv => stv.Demo)
+            .HasForeignKey<Stv>(stv => stv.DemoId);
     }
 }
