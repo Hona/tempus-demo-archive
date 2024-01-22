@@ -8,7 +8,17 @@ public class TESTINGWrHistoryJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        var map = "jump_the_b7";
+        Console.WriteLine("Input map name: ");
+        var map = Console.ReadLine();
+
+        Console.WriteLine("Input class 'D' or 'S':");
+        
+        var @class = Console.ReadLine()!.ToUpper().Trim();
+        
+        if (@class != "D" && @class != "S")
+        {
+            throw new InvalidOperationException("Invalid class");
+        }
         
         await using var db = new ArchiveDbContext();
         
@@ -107,7 +117,11 @@ public class TESTINGWrHistoryJob : IJob
             .ToList();
 
         var classOutput = orderedOutput
-            .Where(x => x.Class == demoman);
+            .Where(x => x.Class == @class switch
+            {
+                "S" => soldier,
+                "D" => demoman,
+            });
         
         foreach (var wrHistoryEntry in classOutput.OrderBy(x => x.Date))
         {

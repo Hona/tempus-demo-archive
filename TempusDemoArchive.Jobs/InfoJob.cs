@@ -22,5 +22,9 @@ public class InfoJob : IJob
         
         var databaseSize = new FileInfo(ArchivePath.Db).Length;
         Console.WriteLine($"Database Size: {databaseSize.Bytes()}");
+        
+        var demoCount = db.Demos.Count();
+        
+        Console.WriteLine($"Total Demos: {demoCount}");
     }
 }

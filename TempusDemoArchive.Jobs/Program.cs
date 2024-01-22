@@ -31,7 +31,9 @@ var jobs = new IJob[]
     new MapNamesThatContain(),
     new FirstBrazilWr(),
     new ExportAllChatLogsFromUrls(),
-    new FindExactMessage()
+    new FindExactMessage(),
+    new GetUserChatLogs(),
+    new RankNaughtyWords()
 };
 
 // User select a job
@@ -46,7 +48,7 @@ var job = jobs[jobIndex];
 
 // Get console cancellationtoken
 var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (sender, args) =>
+Console.CancelKeyPress += (_, args) =>
 {
     args.Cancel = true;
     cts.Cancel();
