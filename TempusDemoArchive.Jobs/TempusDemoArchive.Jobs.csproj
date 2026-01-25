@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
+      <OutputType>Exe</OutputType>
+      <TargetFramework>net10.0</TargetFramework>
+      <ImplicitUsings>enable</ImplicitUsings>
+      <Nullable>enable</Nullable>
+      <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
@@ -12,10 +13,25 @@
     </ItemGroup>
 
     <ItemGroup>
+      <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.0">
+        <PrivateAssets>all</PrivateAssets>
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      </PackageReference>
       <PackageReference Include="CodingUpAStorm.VaderSharp" Version="1.0.4" />
       <PackageReference Include="CsvHelper" Version="32.0.1" />
       <PackageReference Include="Humanizer.Core" Version="2.14.1" />
       <PackageReference Include="TempusApi" Version="4.0.2" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="..\runtimes\win-x64\native\tf_demo_parser.dll">
+        <Link>runtimes/win-x64/native/tf_demo_parser.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content Include="..\runtimes\linux-x64\native\libtf_demo_parser.so">
+        <Link>runtimes/linux-x64/native/libtf_demo_parser.so</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
     </ItemGroup>
 
 </Project>

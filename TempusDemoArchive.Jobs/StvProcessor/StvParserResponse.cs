@@ -9,6 +9,8 @@ public record User(
     [property: JsonPropertyName("userId")] int? UserId,
     [property: JsonPropertyName("steamId")]
     string SteamId,
+    [property: JsonPropertyName("entityId")]
+    int? EntityId,
     [property: JsonPropertyName("team")] string Team
 );
 
@@ -16,7 +18,8 @@ public record Chat(
     [property: JsonPropertyName("kind")] string Kind,
     [property: JsonPropertyName("from")] string From,
     [property: JsonPropertyName("text")] string Text,
-    [property: JsonPropertyName("tick")] int? Tick
+    [property: JsonPropertyName("tick")] int? Tick,
+    [property: JsonPropertyName("client")] int? Client
 );
 
 public record Classes(
@@ -32,9 +35,32 @@ public record Death(
     [property: JsonPropertyName("weapon")] string Weapon,
     [property: JsonPropertyName("victim")] int? Victim,
     [property: JsonPropertyName("assister")]
-    object Assister,
+    int? Assister,
     [property: JsonPropertyName("killer")] int? Killer,
     [property: JsonPropertyName("tick")] int? Tick
+);
+
+public record Spawn(
+    [property: JsonPropertyName("user")] int User,
+    [property: JsonPropertyName("class")] string Class,
+    [property: JsonPropertyName("team")] string Team,
+    [property: JsonPropertyName("tick")] int Tick
+);
+
+public record TeamChange(
+    [property: JsonPropertyName("user")] int User,
+    [property: JsonPropertyName("team")] string Team,
+    [property: JsonPropertyName("oldTeam")] string OldTeam,
+    [property: JsonPropertyName("disconnect")] bool Disconnect,
+    [property: JsonPropertyName("autoTeam")] bool AutoTeam,
+    [property: JsonPropertyName("silent")] bool Silent,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("tick")] int Tick
+);
+
+public record Pause(
+    [property: JsonPropertyName("from")] int From,
+    [property: JsonPropertyName("to")] int To
 );
 
 public record Header(
@@ -61,9 +87,11 @@ public record StvParserResponse(
     [property: JsonPropertyName("users")] Dictionary<string, User> Users,
     [property: JsonPropertyName("deaths")] IReadOnlyList<Death> Deaths,
     [property: JsonPropertyName("rounds")] IReadOnlyList<object> Rounds,
+    [property: JsonPropertyName("spawns")] IReadOnlyList<Spawn> Spawns,
+    [property: JsonPropertyName("teamChanges")] IReadOnlyList<TeamChange> TeamChanges,
     [property: JsonPropertyName("startTick")]
     int? StartTick,
     [property: JsonPropertyName("intervalPerTick")]
     double? IntervalPerTick,
-    [property: JsonPropertyName("pauses")] IReadOnlyList<object> Pauses
+    [property: JsonPropertyName("pauses")] IReadOnlyList<Pause> Pauses
 );

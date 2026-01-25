@@ -27,6 +27,7 @@ var jobs = new IJob[]
     new IngestJobList(),
     new CrawlRecordDemosJob(),
     new DemoProcessorJob(),
+    new ReparseProcessedDemosJob(),
     new InfoJob(),
     new FixupProcessedItemsJob(),
     new ListUnprocessedDemos(),

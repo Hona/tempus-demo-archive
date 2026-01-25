@@ -9,6 +9,7 @@ namespace TempusDemoArchive.Jobs.StvProcessor;
 public class DemoProcessorJob : IJob
 {
     private readonly int MaxConcurrentTasks = 5; // Adjust this value to change the degree of parallelism
+    private const long SteamId64Base = 76561197960265728;
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -28,7 +29,7 @@ public class DemoProcessorJob : IJob
             {
                 Console.WriteLine($"Processing demo {counter} (+- {MaxConcurrentTasks}) of {unprocessedDemos} (ID: {demoEntry.Id})");
 
-                await ProcessDemoAsync(demoEntry.Id, httpClient, cancellationToken);
+                await ProcessDemoAsync(demoEntry.Id, httpClient, cancellationToken, forceReparse: false);
 
                 counter++;
             }
@@ -46,8 +47,8 @@ public class DemoProcessorJob : IJob
         await Task.WhenAll(tasks);
     }
 
-    private async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
-        CancellationToken cancellationToken)
+    internal static async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
+        CancellationToken cancellationToken, bool forceReparse)
     {
         var stopwatch = Stopwatch.StartNew();
         
@@ -59,6 +60,17 @@ public class DemoProcessorJob : IJob
         {
             Console.WriteLine("Demo not found in database: " + demoId);
             return;
+        }
+
+        if (forceReparse)
+        {
+            var existingStv = await db.Stvs.FindAsync(new object[] { demoId }, cancellationToken);
+            if (existingStv != null)
+            {
+                db.Stvs.Remove(existingStv);
+                demoEntry.StvProcessed = false;
+                await db.SaveChangesAsync(cancellationToken);
+            }
         }
 
         var filePath = ArchivePath.GetDemoFilePath(demoId);
@@ -97,12 +109,18 @@ public class DemoProcessorJob : IJob
         var output = StvParser.ExtractStvData(filePath);
 
         Console.WriteLine("Mapping to DB model");
+        var entityToUserId = output.Users.Values
+            .Where(user => user.EntityId.HasValue && user.UserId.HasValue)
+            .ToDictionary(user => user.EntityId!.Value, user => user.UserId!.Value);
+
         var stv = new Stv
         {
             DemoId = demoEntry.Id,
 
             DownloadSize = downloadSizeBytes ?? 0,
             ExtractedFileSize = new FileInfo(filePath).Length,
+            ParsedAtUtc = DateTime.UtcNow,
+            ParserVersion = Environment.GetEnvironmentVariable("TF_DEMO_PARSER_VERSION"),
 
             IntervalPerTick = output.IntervalPerTick,
             StartTick = output.StartTick,
@@ -129,15 +147,67 @@ public class DemoProcessorJob : IJob
                     Kind = x.Kind,
                     Text = x.Text,
                     Tick = x.Tick,
-                    Index = i
+                    Index = i,
+                    ClientEntityId = x.Client,
+                    FromUserId = x.Client.HasValue && entityToUserId.TryGetValue(x.Client.Value, out var userId)
+                        ? userId
+                        : null
                 }).ToList(),
-            Users = output.Users.Select(x => new StvUser
+            Users = output.Users.Select(x =>
+            {
+                var normalized = NormalizeSteamId(x.Value.SteamId);
+                return new StvUser
+                {
+                    DemoId = demoEntry.Id,
+                    Name = x.Value.Name,
+                    SteamId = x.Value.SteamId,
+                    SteamIdClean = normalized.Clean,
+                    SteamId64 = normalized.SteamId64,
+                    SteamIdKind = normalized.Kind,
+                    IsBot = normalized.IsBot,
+                    EntityId = x.Value.EntityId,
+                    Team = x.Value.Team,
+                    UserId = x.Value.UserId
+                };
+            }).ToList(),
+            Spawns = (output.Spawns ?? Array.Empty<Spawn>()).Select((spawn, i) => new StvSpawn
             {
                 DemoId = demoEntry.Id,
-                Name = x.Value.Name,
-                SteamId = x.Value.SteamId,
-                Team = x.Value.Team,
-                UserId = x.Value.UserId
+                Index = i,
+                Tick = spawn.Tick,
+                UserId = spawn.User,
+                Class = spawn.Class,
+                Team = spawn.Team
+            }).ToList(),
+            TeamChanges = (output.TeamChanges ?? Array.Empty<TeamChange>()).Select((change, i) => new StvTeamChange
+            {
+                DemoId = demoEntry.Id,
+                Index = i,
+                Tick = change.Tick,
+                UserId = change.User,
+                Team = change.Team,
+                OldTeam = change.OldTeam,
+                Disconnect = change.Disconnect,
+                AutoTeam = change.AutoTeam,
+                Silent = change.Silent,
+                Name = change.Name
+            }).ToList(),
+            Deaths = (output.Deaths ?? Array.Empty<Death>()).Select((death, i) => new StvDeath
+            {
+                DemoId = demoEntry.Id,
+                Index = i,
+                Tick = death.Tick ?? 0,
+                Weapon = death.Weapon,
+                VictimUserId = death.Victim ?? 0,
+                KillerUserId = death.Killer ?? 0,
+                AssisterUserId = death.Assister
+            }).ToList(),
+            Pauses = (output.Pauses ?? Array.Empty<Pause>()).Select((pause, i) => new StvPause
+            {
+                DemoId = demoEntry.Id,
+                Index = i,
+                FromTick = pause.From,
+                ToTick = pause.To
             }).ToList()
         };
 
@@ -152,5 +222,51 @@ public class DemoProcessorJob : IJob
 
         await db.SaveChangesAsync(cancellationToken);
         Console.WriteLine("Done. Took " + stopwatch.Elapsed.Humanize(2) + "\n");
+    }
+
+    private static (string? Clean, long? SteamId64, string? Kind, bool? IsBot) NormalizeSteamId(string? steamId)
+    {
+        if (string.IsNullOrEmpty(steamId))
+        {
+            return (null, null, null, null);
+        }
+
+        var clean = steamId.Split('\0')[0];
+        if (string.IsNullOrEmpty(clean))
+        {
+            return (clean, null, "unknown", null);
+        }
+
+        if (string.Equals(clean, "BOT", StringComparison.OrdinalIgnoreCase))
+        {
+            return (clean, null, "bot", true);
+        }
+
+        if (clean.StartsWith("STEAM_", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = clean.Substring("STEAM_".Length).Split(':');
+            if (parts.Length == 3
+                && int.TryParse(parts[1], out var y)
+                && long.TryParse(parts[2], out var z))
+            {
+                var steamId64 = SteamId64Base + (z * 2) + y;
+                return (clean, steamId64, "steam2", false);
+            }
+
+            return (clean, null, "steam2", false);
+        }
+
+        if (clean.StartsWith("[U:", StringComparison.OrdinalIgnoreCase) && clean.EndsWith("]", StringComparison.Ordinal))
+        {
+            var lastColon = clean.LastIndexOf(':');
+            if (lastColon > 0 && long.TryParse(clean.Substring(lastColon + 1, clean.Length - lastColon - 2), out var z))
+            {
+                return (clean, SteamId64Base + z, "steam3", false);
+            }
+
+            return (clean, null, "steam3", false);
+        }
+
+        return (clean, null, "unknown", null);
     }
 }

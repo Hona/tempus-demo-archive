@@ -2,6 +2,7 @@ using TempusApi;
 using TempusApi.Enums;
 using TempusApi.Models.Activity;
 using TempusApi.Models.Responses;
+using ResponseZoneInfo = TempusApi.Models.Responses.ZoneInfo;
 using TempusDemoArchive.Persistence.Models;
 
 namespace TempusDemoArchive.Jobs;
@@ -135,8 +136,8 @@ public class CrawlRecordDemosJob : IJob
 
             previousPageKey = pageKey;
 
-            var recordCount = 0;
-            foreach (var demoEntry in ExtractDemoEntries(records.Runs, ref recordCount))
+            var recordCount = GetRecordCount(records.Runs);
+            foreach (var demoEntry in ExtractDemoEntries(records.Runs))
             {
                 yield return demoEntry;
             }
@@ -159,11 +160,10 @@ public class CrawlRecordDemosJob : IJob
         }
     }
 
-    private static IEnumerable<DemoEntry> ExtractDemoEntries(ZonedResults results, ref int recordCount)
+    private static IEnumerable<DemoEntry> ExtractDemoEntries(ZonedResults results)
     {
         foreach (var record in results.SoldierRuns ?? Enumerable.Empty<RecordInfoShort>())
         {
-            recordCount++;
             var demoInfo = record.DemoInfo;
             if (demoInfo == null || string.IsNullOrWhiteSpace(demoInfo.Url))
             {
@@ -175,7 +175,6 @@ public class CrawlRecordDemosJob : IJob
 
         foreach (var record in results.DemomanRuns ?? Enumerable.Empty<RecordInfoShort>())
         {
-            recordCount++;
             var demoInfo = record.DemoInfo;
             if (demoInfo == null || string.IsNullOrWhiteSpace(demoInfo.Url))
             {
@@ -184,6 +183,13 @@ public class CrawlRecordDemosJob : IJob
 
             yield return new DemoEntry((ulong)demoInfo.Id, demoInfo.Url, record.Date);
         }
+    }
+
+    private static int GetRecordCount(ZonedResults results)
+    {
+        var soldierCount = results.SoldierRuns?.Count ?? 0;
+        var demomanCount = results.DemomanRuns?.Count ?? 0;
+        return soldierCount + demomanCount;
     }
 
     private static string? GetPageKey(ZonedResults results)
@@ -214,20 +220,20 @@ public class CrawlRecordDemosJob : IJob
 
     private readonly record struct DemoEntry(ulong Id, string Url, double Date);
 
-    private static IEnumerable<ZoneInfo> EnumerateZones(FullMapOverview2 overview)
+    private static IEnumerable<ResponseZoneInfo> EnumerateZones(FullMapOverview2 overview)
     {
         if (overview?.Zones == null)
         {
             yield break;
         }
 
-        foreach (var zone in overview.Zones.Map ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.Course ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.CourseEnd ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.Bonus ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.BonusEnd ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.Trick ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.MapEnd ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
-        foreach (var zone in overview.Zones.Misc ?? Enumerable.Empty<ZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.Map ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.Course ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.CourseEnd ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.Bonus ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.BonusEnd ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.Trick ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.MapEnd ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+        foreach (var zone in overview.Zones.Misc ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
     }
 }
