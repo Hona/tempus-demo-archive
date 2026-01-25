@@ -22,6 +22,7 @@ await using (var db = new ArchiveDbContext())
 var jobs = new IJob[]
 {
     new IngestJobList(),
+    new CrawlRecordDemosJob(),
     new DemoProcessorJob(),
     new InfoJob(),
     new FixupProcessedItemsJob(),
