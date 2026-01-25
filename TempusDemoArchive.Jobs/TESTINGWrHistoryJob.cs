@@ -72,7 +72,7 @@ public class TESTINGWrHistoryJob : IJob
             
             var date = await db.Demos
                 .Where(x => x.Id == tuple.DemoId)
-                .Select(x => GetDateFromTimestamp(x.Date))
+                .Select(x => ArchiveUtils.GetDateFromTimestamp(x.Date))
                 .FirstOrDefaultAsync(cancellationToken);
             
             var identity = await ResolveUserIdentityAsync(db, tuple.DemoId, player, cancellationToken);
@@ -112,7 +112,7 @@ public class TESTINGWrHistoryJob : IJob
             
             var date = await db.Demos
                 .Where(x => x.Id == tuple.DemoId)
-                .Select(x => GetDateFromTimestamp(x.Date))
+                .Select(x => ArchiveUtils.GetDateFromTimestamp(x.Date))
                 .FirstOrDefaultAsync(cancellationToken);
             
             var identity = await ResolveUserIdentityAsync(db, tuple.DemoId, player, cancellationToken);
@@ -135,18 +135,10 @@ public class TESTINGWrHistoryJob : IJob
         
         foreach (var wrHistoryEntry in classOutput.OrderBy(x => x.Date))
         {
-            var date = wrHistoryEntry.Date?.ToString("yyyy-MM-dd") ?? "unknown";
+            var date = ArchiveUtils.FormatDate(wrHistoryEntry.Date);
             var steam = wrHistoryEntry.SteamId64?.ToString() ?? wrHistoryEntry.SteamId ?? "unknown";
             Console.WriteLine($"{date} - {wrHistoryEntry.Time} - {wrHistoryEntry.Player} ({wrHistoryEntry.DemoId}) [{steam}]");
         }
-    }
-    
-    public static DateTime GetDateFromTimestamp(double timestamp)
-    {
-        // Convert the timestamp to milliseconds and then to long
-        var milliseconds = (long)(timestamp * 1000);
-
-        return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).DateTime;
     }
 
     private static async Task<UserIdentity?> ResolveUserIdentityAsync(ArchiveDbContext db, ulong demoId, string player,

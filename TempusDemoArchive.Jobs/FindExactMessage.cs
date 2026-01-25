@@ -59,7 +59,7 @@ public class FindExactMessage : IJob
             foreach (var match in matching)
             {
                 var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == match.DemoId, cancellationToken: cancellationToken);
-                var date = demo == null ? "unknown" : TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date).ToString("yyyy-MM-dd");
+                var date = demo == null ? "unknown" : ArchiveUtils.FormatDate(ArchiveUtils.GetDateFromTimestamp(demo.Date));
                 stringBuilder.AppendLine(date + ": " + match.Text);
             }
 

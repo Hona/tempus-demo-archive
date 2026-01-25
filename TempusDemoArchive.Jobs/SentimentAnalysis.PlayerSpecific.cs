@@ -18,29 +18,23 @@ public class SentimentAnalysis_PlayerSpecificJob : IJob
             return;
         }
 
-        var steam64 = long.TryParse(playerIdentifier, out var parsed) ? parsed : (long?)null;
-        
         await using var db = new ArchiveDbContext();
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        var userQuery = db.StvUsers
-            .Where(user => user.UserId != null)
-            .Where(user => user.SteamId == playerIdentifier || user.SteamIdClean == playerIdentifier
-                           || (steam64 != null && user.SteamId64 == steam64));
+        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier);
 
-        var results = await db.StvChats
-            .Where(chat => chat.FromUserId != null)
+        var results = await ArchiveQueries.ChatsWithUsers(db)
             .Join(userQuery,
-                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
-                user => new { user.DemoId, UserId = user.UserId!.Value },
-                (chat, user) => new { chat.Text, user.Name })
+                chat => new { chat.DemoId, SteamId64 = chat.SteamId64, SteamId = chat.SteamId ?? string.Empty },
+                user => new { user.DemoId, user.SteamId64, SteamId = (string?)user.SteamIdClean ?? user.SteamId },
+                (chat, _) => chat)
             .ToListAsync(cancellationToken);
 
         var output = results
             .Select(group =>
             {
-                var messageOnly = GetMessageBody(group.Text);
+                var messageOnly = ArchiveUtils.GetMessageBody(group.Text);
                 return new MessageSentiment
                 {
                     Text = messageOnly,
@@ -62,12 +56,6 @@ public class SentimentAnalysis_PlayerSpecificJob : IJob
         }
     }
 
-    private static string GetMessageBody(string text)
-    {
-        var marker = " : ";
-        var index = text.IndexOf(marker, StringComparison.Ordinal);
-        return index >= 0 ? text[(index + marker.Length)..] : text;
-    }
 }
 
 public class MessageSentiment

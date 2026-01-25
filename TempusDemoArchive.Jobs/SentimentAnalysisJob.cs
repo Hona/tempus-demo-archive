@@ -15,18 +15,7 @@ public class SentimentAnalysisJob : IJob
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        var messages = await db.StvChats
-            .Where(chat => chat.FromUserId != null)
-            .Join(db.StvUsers.Where(user => user.UserId != null),
-                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
-                user => new { user.DemoId, UserId = user.UserId!.Value },
-                (chat, user) => new ChatWithUser
-                {
-                    Text = chat.Text,
-                    Name = user.Name,
-                    SteamId64 = user.SteamId64,
-                    SteamId = user.SteamIdClean ?? user.SteamId
-                })
+        var messages = await ArchiveQueries.ChatsWithUsers(db)
             .ToListAsync(cancellationToken);
 
         var results = messages
@@ -36,7 +25,7 @@ public class SentimentAnalysisJob : IJob
                 SteamId64 = group.Key.SteamId64,
                 SteamId = group.Key.SteamId ?? string.Empty,
                 Name = GetMostCommonName(group),
-                CompoundScore = group.Average(chat => analyzer.PolarityScores(GetMessageBody(chat.Text)).Compound),
+                CompoundScore = group.Average(chat => analyzer.PolarityScores(ArchiveUtils.GetMessageBody(chat.Text)).Compound),
                 MessageCount = group.Count()
             })
             .OrderByDescending(x => x.CompoundScore)
@@ -51,14 +40,7 @@ public class SentimentAnalysisJob : IJob
         await csv.WriteRecordsAsync(results, cancellationToken);
     }
 
-    private static string GetMessageBody(string text)
-    {
-        var marker = " : ";
-        var index = text.IndexOf(marker, StringComparison.Ordinal);
-        return index >= 0 ? text[(index + marker.Length)..] : text;
-    }
-
-    private static string GetMostCommonName(IEnumerable<ChatWithUser> group)
+    private static string GetMostCommonName(IEnumerable<ChatWithUserRow> group)
     {
         return group
             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
@@ -76,12 +58,4 @@ public class UserSentiment
     public long? SteamId64 { get; set; }
     public required double CompoundScore { get; set; }
     public int MessageCount { get; set; }
-}
-
-public class ChatWithUser
-{
-    public required string Text { get; set; }
-    public required string Name { get; set; }
-    public string? SteamId { get; set; }
-    public long? SteamId64 { get; set; }
 }

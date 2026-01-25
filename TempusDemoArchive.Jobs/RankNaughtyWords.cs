@@ -17,23 +17,18 @@ public class RankNaughtyWords : IJob
             return;
         }
         
-        var matching = await db.StvChats
-            .Where(chat => chat.FromUserId != null)
+        var matching = await ArchiveQueries.ChatsWithUsers(db)
             .Where(chat => EF.Functions.Like(chat.Text, $"%{foundMessage}%"))
-            .Join(db.StvUsers.Where(user => user.UserId != null),
-                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
-                user => new { user.DemoId, UserId = user.UserId!.Value },
-                (chat, user) => new { chat.Text, user.Name, user.SteamId64, user.SteamIdClean, user.SteamId })
             .ToListAsync(cancellationToken: cancellationToken);
 
         var sb = new StringBuilder();
         
         foreach (var match in matching
-                     .GroupBy(x => new { x.SteamId64, x.SteamIdClean, x.SteamId, x.Name })
+                     .GroupBy(x => new { x.SteamId64, x.SteamId, x.Name })
                      .OrderByDescending(x => x.Count()))
         {
             var key = match.Key;
-            var steamId = key.SteamIdClean ?? key.SteamId ?? "unknown";
+            var steamId = key.SteamId ?? "unknown";
             var name = string.IsNullOrWhiteSpace(key.Name) ? "unknown" : key.Name;
 
             sb.AppendLine($"{name} ({steamId}) : {match.Count()}");

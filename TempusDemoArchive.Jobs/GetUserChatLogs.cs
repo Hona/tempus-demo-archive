@@ -17,15 +17,12 @@ public class GetUserChatLogs : IJob
 
         await using var db = new ArchiveDbContext();
 
-        var userQuery = db.StvUsers
-            .Where(user => user.UserId != null)
-            .Where(user => user.SteamId == steamId || user.SteamIdClean == steamId);
+        var userQuery = ArchiveQueries.SteamUserQuery(db, steamId);
 
-        var matching = await db.StvChats
-            .Where(chat => chat.FromUserId != null)
+        var matching = await ArchiveQueries.ChatsWithUsers(db)
             .Join(userQuery,
-                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
-                user => new { user.DemoId, UserId = user.UserId!.Value },
+                chat => new { chat.DemoId, chat.SteamId64, SteamId = chat.SteamId ?? string.Empty },
+                user => new { user.DemoId, user.SteamId64, SteamId = (string?)user.SteamIdClean ?? user.SteamId },
                 (chat, _) => chat)
             .ToListAsync(cancellationToken);
         
@@ -36,7 +33,7 @@ public class GetUserChatLogs : IJob
         foreach (var match in matching)
         {
             var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == match.DemoId, cancellationToken: cancellationToken);
-            var date = demo == null ? "unknown" : TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date).ToString("yyyy-MM-dd");
+            var date = demo == null ? "unknown" : ArchiveUtils.FormatDate(ArchiveUtils.GetDateFromTimestamp(demo.Date));
             stringBuilder.AppendLine(date + ": " + match.Text);
         }
         
