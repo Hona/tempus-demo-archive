@@ -40,9 +40,11 @@ public class ReparseDemosJob : IJob
                 break;
             }
 
+            var lastIdLong = lastId > long.MaxValue ? long.MaxValue : (long)lastId;
             var batch = await db.Demos
-                .Where(demo => demo.StvProcessed && demo.Id > lastId)
-                .OrderBy(demo => demo.Id)
+                .Where(demo => demo.StvProcessed)
+                .Where(demo => EF.Property<long>(demo, "Id") > lastIdLong)
+                .OrderBy(demo => EF.Property<long>(demo, "Id"))
                 .Select(demo => demo.Id)
                 .Take(Math.Min(BatchSize, remainingLimit))
                 .ToListAsync(cancellationToken);
