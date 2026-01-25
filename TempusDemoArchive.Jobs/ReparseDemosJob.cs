@@ -21,13 +21,22 @@ public class ReparseDemosJob : IJob
         var explicitIds = GetExplicitDemoIds();
         if (explicitIds != null)
         {
-            await ProcessBatchesAsync(explicitIds, explicitIds.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
+            var explicitTotal = explicitIds.Count;
+            Console.WriteLine($"Total demos to reparse: {explicitTotal}");
+            await ProcessBatchesAsync(explicitIds, explicitTotal, 0, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
             return;
         }
 
         var state = LoadState();
         var processed = state?.ProcessedCount ?? 0;
         var limit = GetLimit();
+
+        var totalTarget = await GetTotalTargetAsync(limit, cancellationToken);
+        Console.WriteLine($"Total demos to reparse: {totalTarget}");
+        if (totalTarget == 0)
+        {
+            return;
+        }
 
         if (state != null)
         {
@@ -59,12 +68,12 @@ public class ReparseDemosJob : IJob
                 break;
             }
 
-            processed += await ProcessBatchesAsync(batch, processed + batch.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
+            processed += await ProcessBatchesAsync(batch, totalTarget, processed, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
             SaveState(new ReparseState(processed, DateTimeOffset.UtcNow));
         }
     }
 
-    private static async Task<int> ProcessBatchesAsync(IReadOnlyList<ulong> demoIds, int total,
+    private static async Task<int> ProcessBatchesAsync(IReadOnlyList<ulong> demoIds, int totalTarget, int processedBase,
         HttpClient httpClient, SemaphoreSlim semaphore, CancellationToken cancellationToken, int maxConcurrentTasks,
         int logEvery, bool verbose)
     {
@@ -75,9 +84,11 @@ public class ReparseDemosJob : IJob
             try
             {
                 var current = Interlocked.Increment(ref counter);
-                if (logEvery > 0 && (current == 1 || current % logEvery == 0))
+                var totalProcessed = processedBase + current;
+                if (logEvery > 0 && (totalProcessed == 1 || totalProcessed % logEvery == 0))
                 {
-                    Console.WriteLine($"Reparsed {current} demos (total batch target {total})");
+                    var remaining = Math.Max(totalTarget - totalProcessed, 0);
+                    Console.WriteLine($"Reparsed {totalProcessed}/{totalTarget} (remaining {remaining})");
                 }
 
                 await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true, verbose: verbose);
@@ -95,6 +106,13 @@ public class ReparseDemosJob : IJob
 
         await Task.WhenAll(tasks);
         return demoIds.Count;
+    }
+
+    private static async Task<int> GetTotalTargetAsync(int limit, CancellationToken cancellationToken)
+    {
+        await using var db = new ArchiveDbContext();
+        var total = await db.Demos.CountAsync(demo => demo.StvProcessed, cancellationToken);
+        return limit > 0 ? Math.Min(limit, total) : total;
     }
 
     private static List<ulong>? GetExplicitDemoIds()
