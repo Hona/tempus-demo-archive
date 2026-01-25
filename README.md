@@ -8,10 +8,10 @@ Ingest Tempus demo URLs, parse STV data, and persist raw events in a local SQLit
 - Native parser – `tf_demo_parser` via P/Invoke; binaries live in `runtimes/<rid>/native/`.
 
 ## Data Flow
-1. **IngestJobList** – loads `archived_demos.txt` into `Demos`.
+1. **IngestArchivedDemosJob** – loads `archived_demos.txt` into `Demos`.
 2. **CrawlRecordDemosJob** – crawls Tempus records API and adds new demos to `Demos`.
-3. **DemoProcessorJob** – downloads zips, extracts `.dem`, parses, writes `Stv*` tables, marks `StvProcessed`.
-4. **ReparseProcessedDemosJob** (optional) – reprocesses previously parsed demos using the latest parser/schema.
+3. **ParseDemosJob** – downloads zips, extracts `.dem`, parses, writes `Stv*` tables, marks `StvProcessed`.
+4. **ReparseDemosJob** (optional) – reprocesses previously parsed demos using the latest parser/schema.
 
 ## Quick Start
 Prereqs:

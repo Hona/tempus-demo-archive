@@ -3,7 +3,7 @@
 ## Key Learnings (as of 2026-01-25)
 
 - **Two sources of demos**:
-  - `archived_demos.txt` (static export) via `IngestJobList`.
+  - `archived_demos.txt` (static export) via `IngestArchivedDemosJob`.
   - API crawl via `CrawlRecordDemosJob` (records list + demo_info URLs).
 - **No API endpoint to list all demos**; best-effort crawl is via records API.
 
@@ -57,7 +57,7 @@
 - Backup path convention: `tempus-demo-archive.db.bak-<timestamp>`.
 
 ## Reparse Controls
-- `ReparseProcessedDemosJob` re‑downloads and re‑parses processed demos.
+- `ReparseDemosJob` re‑downloads and re‑parses processed demos.
 - Env controls:
   - `TEMPUS_REPARSE_DEMO_IDS` (explicit list)
   - `TEMPUS_REPARSE_LIMIT` (oldest N)

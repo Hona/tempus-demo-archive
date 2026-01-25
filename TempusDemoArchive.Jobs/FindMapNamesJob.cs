@@ -1,6 +1,6 @@
 ﻿namespace TempusDemoArchive.Jobs;
 
-public class MapNamesThatContain : IJob
+public class FindMapNamesJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

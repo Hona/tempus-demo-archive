@@ -6,7 +6,7 @@ using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs.StvProcessor;
 
-public class DemoProcessorJob : IJob
+public class ParseDemosJob : IJob
 {
     private readonly int MaxConcurrentTasks = 5; // Adjust this value to change the degree of parallelism
     private const long SteamId64Base = 76561197960265728;

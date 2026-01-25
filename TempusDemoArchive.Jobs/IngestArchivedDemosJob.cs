@@ -2,7 +2,7 @@
 
 namespace TempusDemoArchive.Jobs;
 
-public class IngestJobList : IJob
+public class IngestArchivedDemosJob : IJob
 {
     private const int BatchSize = 1000;
 

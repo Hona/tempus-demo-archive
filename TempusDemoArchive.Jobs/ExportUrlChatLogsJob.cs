@@ -3,7 +3,7 @@ using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs;
 
-public class ExportAllChatLogsFromUrls : IJob
+public class ExportUrlChatLogsJob : IJob
 {
 
     
@@ -31,7 +31,7 @@ public class ExportAllChatLogsFromUrls : IJob
             chatLogs.AddRange(chatLog);
         }
         
-        var fileName = $"all_chatlogs_{FindExactMessage.ToValidFileName(DateTime.Now.ToString("s"))}.txt";
+        var fileName = $"all_chatlogs_{SearchChatMessagesJob.ToValidFileName(DateTime.Now.ToString("s"))}.txt";
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         
         await File.WriteAllLinesAsync(filePath, chatLogs.Select(x => x.Text), cancellationToken);

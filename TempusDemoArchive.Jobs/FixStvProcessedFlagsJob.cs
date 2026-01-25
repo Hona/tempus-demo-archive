@@ -1,6 +1,6 @@
 ﻿namespace TempusDemoArchive.Jobs;
 
-public class FixupProcessedItemsJob : IJob
+public class FixStvProcessedFlagsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

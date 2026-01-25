@@ -1,6 +1,6 @@
 namespace TempusDemoArchive.Jobs;
 
-public class ReparseProcessedDemosJob : IJob
+public class ReparseDemosJob : IJob
 {
     private readonly int MaxConcurrentTasks = 3;
 
@@ -22,7 +22,7 @@ public class ReparseProcessedDemosJob : IJob
             {
                 var current = Interlocked.Increment(ref counter);
                 Console.WriteLine($"Reparsing demo {current} (+- {MaxConcurrentTasks}) of {demoIds.Count} (ID: {demoId})");
-                await StvProcessor.DemoProcessorJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true);
+                await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true);
             }
             catch (Exception e)
             {

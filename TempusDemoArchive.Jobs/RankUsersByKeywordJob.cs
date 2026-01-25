@@ -2,7 +2,7 @@
 
 namespace TempusDemoArchive.Jobs;
 
-public class RankNaughtyWords : IJob
+public class RankUsersByKeywordJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -38,7 +38,7 @@ public class RankNaughtyWords : IJob
         
         Console.WriteLine(text);
         
-        var fileName = $"naughty_words_{FindExactMessage.ToValidFileName(foundMessage)}.txt";
+        var fileName = $"naughty_words_{SearchChatMessagesJob.ToValidFileName(foundMessage)}.txt";
         
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         

@@ -4,7 +4,7 @@ using CsvHelper.Configuration;
 
 namespace TempusDemoArchive.Jobs;
 
-public class SentimentAnalysisJob_KnownPlayersJob : IJob
+public class FilterKnownPlayersSentimentJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

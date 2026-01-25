@@ -2,7 +2,7 @@
 
 namespace TempusDemoArchive.Jobs;
 
-public class InfoJob : IJob
+public class PrintArchiveStatsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

@@ -4,7 +4,7 @@ using SQLitePCL;
 
 namespace TempusDemoArchive.Jobs;
 
-public class TESTINGWrHistoryJob : IJob
+public class ExtractWrHistoryFromChatJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

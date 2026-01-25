@@ -5,7 +5,7 @@ using VaderSharp;
 
 namespace TempusDemoArchive.Jobs;
 
-public class SentimentAnalysis_PlayerSpecificJob : IJob
+public class InspectUserSentimentJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

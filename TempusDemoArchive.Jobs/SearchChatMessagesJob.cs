@@ -4,7 +4,7 @@ using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs;
 
-public class FindExactMessage : IJob
+public class SearchChatMessagesJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

@@ -2,7 +2,7 @@
 
 namespace TempusDemoArchive.Jobs;
 
-public class ExportAllChatLogsFromMap : IJob
+public class ExportMapChatLogsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {

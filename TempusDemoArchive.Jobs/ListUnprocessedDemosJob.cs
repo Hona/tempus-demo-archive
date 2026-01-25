@@ -1,6 +1,6 @@
 ﻿namespace TempusDemoArchive.Jobs;
 
-public class ListUnprocessedDemos : IJob
+public class ListUnprocessedDemosJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
