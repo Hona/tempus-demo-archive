@@ -4,6 +4,7 @@ using TempusApi.Models.Activity;
 using TempusApi.Models.Responses;
 using ResponseZoneInfo = TempusApi.Models.Responses.ZoneInfo;
 using TempusDemoArchive.Persistence.Models;
+using System.Text.Json;
 
 namespace TempusDemoArchive.Jobs;
 
@@ -11,6 +12,7 @@ public class CrawlRecordDemosJob : IJob
 {
     private const int PageSize = 50;
     private const bool UseUnlimitedLimit = true;
+    private const string StateFileName = "crawl-record-demos-state.json";
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -20,13 +22,24 @@ public class CrawlRecordDemosJob : IJob
         var existingIds = db.Demos.Select(x => x.Id).ToHashSet();
         Console.WriteLine($"Existing demos: {existingIds.Count}");
 
+        var state = LoadState();
+        var resumeMapId = state?.MapId;
+        var resumeZoneId = state?.ZoneId;
+        var resumeStart = state?.Start ?? 1;
+        var resumeMapReached = resumeMapId == null;
+        var resumeZoneReached = resumeZoneId == null;
+
+        if (state != null)
+        {
+            Console.WriteLine($"Resuming crawl at map {state.MapId}, zone {state.ZoneId}, start {state.Start}");
+        }
+
         using var httpClient = new HttpClient();
         var client = new TempusClient(httpClient);
 
         var mapIds = await GetMapIdsAsync(client, cancellationToken);
         Console.WriteLine($"Maps: {mapIds.Count}");
 
-        var newDemos = new List<Demo>();
         var totalAdded = 0;
         var zoneIdsSeen = new HashSet<long>();
         var mapIndex = 0;
@@ -34,47 +47,78 @@ public class CrawlRecordDemosJob : IJob
         foreach (var mapId in mapIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            mapIndex++;
-            Console.WriteLine($"Map {mapIndex}/{mapIds.Count}: {mapId}");
 
-            var zoneIds = await GetZoneIdsAsync(client, mapId, cancellationToken);
-            foreach (var zoneId in zoneIds)
-            {
-                if (!zoneIdsSeen.Add(zoneId))
+                if (!resumeMapReached)
                 {
-                    continue;
+                    if (mapId != resumeMapId)
+                    {
+                        mapIndex++;
+                        continue;
+                    }
+
+                    resumeMapReached = true;
                 }
 
-                await foreach (var demoEntry in EnumerateZoneDemosAsync(client, zoneId, cancellationToken))
+                mapIndex++;
+                Console.WriteLine($"Map {mapIndex}/{mapIds.Count}: {mapId}");
+
+                var zoneIds = await GetZoneIdsAsync(client, mapId, cancellationToken);
+                foreach (var zoneId in zoneIds)
                 {
-                    if (!existingIds.Add(demoEntry.Id))
+                    if (!zoneIdsSeen.Add(zoneId))
                     {
                         continue;
                     }
 
-                    newDemos.Add(new Demo
+                    if (!resumeZoneReached && mapId == resumeMapId)
                     {
-                        Id = demoEntry.Id,
-                        Url = demoEntry.Url,
-                        Date = demoEntry.Date,
-                        StvProcessed = false
-                    });
+                        if (zoneId != resumeZoneId)
+                        {
+                            continue;
+                        }
 
-                    if (newDemos.Count < 500)
-                    {
-                        continue;
+                        resumeZoneReached = true;
                     }
 
-                    totalAdded += await PersistDemosAsync(db, newDemos, cancellationToken);
+                    var start = mapId == resumeMapId && zoneId == resumeZoneId ? resumeStart : 1;
+                    totalAdded += await ProcessZoneAsync(client, mapId, zoneId, start, existingIds, db, cancellationToken);
                 }
             }
 
-            totalAdded += await PersistDemosAsync(db, newDemos, cancellationToken);
-        }
-
-        totalAdded += await PersistDemosAsync(db, newDemos, cancellationToken);
         Console.WriteLine($"New demos added: {totalAdded}");
     }
+
+    private static CrawlState? LoadState()
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("TEMPUS_CRAWL_RESET"), "1",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (File.Exists(StateFilePath))
+            {
+                File.Delete(StateFilePath);
+            }
+
+            return null;
+        }
+
+        if (!File.Exists(StateFilePath))
+        {
+            return null;
+        }
+
+        var json = File.ReadAllText(StateFilePath);
+        return JsonSerializer.Deserialize<CrawlState>(json);
+    }
+
+    private static void SaveState(CrawlState state)
+    {
+        var json = JsonSerializer.Serialize(state);
+        File.WriteAllText(StateFilePath, json);
+    }
+
+    private static string StateFilePath => Path.Combine(ArchivePath.Root, StateFileName);
+
+    private sealed record CrawlState(long MapId, long ZoneId, int Start, DateTimeOffset UpdatedAt);
 
     private async Task<int> PersistDemosAsync(ArchiveDbContext db, List<Demo> newDemos, CancellationToken cancellationToken)
     {
@@ -102,12 +146,13 @@ public class CrawlRecordDemosJob : IJob
         return EnumerateZones(overview).Select(zone => zone.Id).ToList();
     }
 
-    private async IAsyncEnumerable<DemoEntry> EnumerateZoneDemosAsync(TempusClient client, long zoneId,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    private async Task<int> ProcessZoneAsync(TempusClient client, long mapId, long zoneId, int start,
+        HashSet<ulong> existingIds, ArchiveDbContext db, CancellationToken cancellationToken)
     {
-        var start = 1;
+        var currentStart = Math.Max(start, 1);
         string? previousPageKey = null;
-        var useUnlimited = UseUnlimitedLimit;
+        var useUnlimited = UseUnlimitedLimit && currentStart == 1;
+        var totalAdded = 0;
 
         while (true)
         {
@@ -116,47 +161,65 @@ public class CrawlRecordDemosJob : IJob
             ZonedRecordsModel records;
             try
             {
-                records = await client.GetTopZonedTimes(zoneId, useUnlimited ? 0 : PageSize, start, cancellationToken: cancellationToken);
+                records = await client.GetTopZonedTimes(zoneId, useUnlimited ? 0 : PageSize, currentStart, cancellationToken: cancellationToken);
             }
             catch (HttpRequestException)
             {
-                yield break;
+                return totalAdded;
             }
 
             if (records.Runs == null)
             {
-                yield break;
+                return totalAdded;
             }
 
             var pageKey = GetPageKey(records.Runs);
             if (pageKey == previousPageKey)
             {
-                yield break;
+                return totalAdded;
             }
 
             previousPageKey = pageKey;
 
             var recordCount = GetRecordCount(records.Runs);
+
+            var newDemos = new List<Demo>();
             foreach (var demoEntry in ExtractDemoEntries(records.Runs))
             {
-                yield return demoEntry;
+                if (!existingIds.Add(demoEntry.Id))
+                {
+                    continue;
+                }
+
+                newDemos.Add(new Demo
+                {
+                    Id = demoEntry.Id,
+                    Url = demoEntry.Url,
+                    Date = demoEntry.Date,
+                    StvProcessed = false
+                });
             }
+
+            totalAdded += await PersistDemosAsync(db, newDemos, cancellationToken);
 
             if (useUnlimited)
             {
                 if (recordCount < PageSize || recordCount > PageSize)
                 {
-                    yield break;
+                    SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
+                    return totalAdded;
                 }
 
                 useUnlimited = false;
             }
             else if (recordCount < PageSize)
             {
-                yield break;
+                SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
+                return totalAdded;
             }
 
-            start += PageSize;
+            currentStart += PageSize;
+            SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
         }
     }
 
