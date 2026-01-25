@@ -31,6 +31,8 @@ public class SentimentAnalysisJob_KnownPlayersJob : IJob
             .Select(x => new UserSentiment()
             {
                 Name = x.Key,
+                SteamId = x.FirstOrDefault()?.SteamId ?? string.Empty,
+                SteamId64 = x.FirstOrDefault()?.SteamId64,
                 CompoundScore = x.Average(y => y.CompoundScore)
             })
             .OrderByDescending(x => x.CompoundScore)

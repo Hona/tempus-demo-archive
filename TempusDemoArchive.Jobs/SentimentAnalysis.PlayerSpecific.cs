@@ -9,24 +9,38 @@ public class SentimentAnalysis_PlayerSpecificJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        var playerName = "minty";
+        Console.WriteLine("Enter steam ID or Steam64:");
+        var playerIdentifier = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        {
+            Console.WriteLine("No identifier provided.");
+            return;
+        }
+
+        var steam64 = long.TryParse(playerIdentifier, out var parsed) ? parsed : (long?)null;
         
         await using var db = new ArchiveDbContext();
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        // Lets get per steam user, per year sentiment analysis.
-        // Each chat message gets the compound score then is averaged in the yearly groupings.
-        // Select out the year, steamID, last known name, and average compound score.
+        var userQuery = db.StvUsers
+            .Where(user => user.UserId != null)
+            .Where(user => user.SteamId == playerIdentifier || user.SteamIdClean == playerIdentifier
+                           || (steam64 != null && user.SteamId64 == steam64));
 
-        var results = db.StvChats
-            .Where(x => !x.Text.StartsWith("Tip |"))
-            .Where(x => x.Text.StartsWith("* [") || x.Text.StartsWith("["))
-            .Where(x => EF.Functions.Like(x.Text, $"%{playerName + " : "}%"))
-            .ToList()
+        var results = await db.StvChats
+            .Where(chat => chat.FromUserId != null)
+            .Join(userQuery,
+                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
+                user => new { user.DemoId, UserId = user.UserId!.Value },
+                (chat, user) => new { chat.Text, user.Name })
+            .ToListAsync(cancellationToken);
+
+        var output = results
             .Select(group =>
             {
-                var messageOnly = group.Text.Split(" : ", 2)[1];
+                var messageOnly = GetMessageBody(group.Text);
                 return new MessageSentiment
                 {
                     Text = messageOnly,
@@ -38,14 +52,21 @@ public class SentimentAnalysis_PlayerSpecificJob : IJob
             .Take(200)
             .ToList();
 
-        for (var index = 0; index < results.Count; index++)
+        for (var index = 0; index < output.Count; index++)
         {
-            var result = results[index];
+            var result = output[index];
             
             Console.WriteLine($"#{index} = {result.CompoundScore} | '{result.Text}'");
             Console.WriteLine(result.FullText);
             Console.WriteLine();
         }
+    }
+
+    private static string GetMessageBody(string text)
+    {
+        var marker = " : ";
+        var index = text.IndexOf(marker, StringComparison.Ordinal);
+        return index >= 0 ? text[(index + marker.Length)..] : text;
     }
 }
 

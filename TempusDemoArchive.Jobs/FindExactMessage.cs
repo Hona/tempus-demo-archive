@@ -20,7 +20,6 @@ public class FindExactMessage : IJob
         }
         
         var matching = db.StvChats.Where(x => EF.Functions.Like(x.Text, $"%{foundMessage}%")) // instead of string.Contains we're using EF functions for case insensitivity
-            .Where(x => !x.Text.StartsWith("Tip |"))
             .ToList();
 
         if (matching.Count == 1)

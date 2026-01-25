@@ -27,7 +27,6 @@ public class GetUserChatLogs : IJob
                 chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
                 user => new { user.DemoId, UserId = user.UserId!.Value },
                 (chat, _) => chat)
-            .Where(chat => !chat.Text.StartsWith("Tip |"))
             .ToListAsync(cancellationToken);
         
         var stringBuilder = new StringBuilder();

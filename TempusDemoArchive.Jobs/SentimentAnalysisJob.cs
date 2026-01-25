@@ -15,20 +15,29 @@ public class SentimentAnalysisJob : IJob
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        // Lets get per steam user, per year sentiment analysis.
-        // Each chat message gets the compound score then is averaged in the yearly groupings.
-        // Select out the year, steamID, last known name, and average compound score.
+        var messages = await db.StvChats
+            .Where(chat => chat.FromUserId != null)
+            .Join(db.StvUsers.Where(user => user.UserId != null),
+                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
+                user => new { user.DemoId, UserId = user.UserId!.Value },
+                (chat, user) => new ChatWithUser
+                {
+                    Text = chat.Text,
+                    Name = user.Name,
+                    SteamId64 = user.SteamId64,
+                    SteamId = user.SteamIdClean ?? user.SteamId
+                })
+            .ToListAsync(cancellationToken);
 
-        var results = db.StvChats
-            .Where(x => !x.Text.StartsWith("Tip |"))
-            .Where(x => x.Text.StartsWith("* [") || x.Text.StartsWith("["))
-            .Where(x => x.Text.Contains(" : "))
-            .ToList()
-            .GroupBy(x => x.Text.Split(']', 2).Last().Split(":", 2, StringSplitOptions.RemoveEmptyEntries).First())
-            .Select(group => new UserSentiment()
+        var results = messages
+            .GroupBy(message => new { message.SteamId64, message.SteamId })
+            .Select(group => new UserSentiment
             {
-                Name = group.Key,
-                CompoundScore = group.Average(chat => analyzer.PolarityScores(chat.Text.Split(" : ", 2)[1]).Compound)
+                SteamId64 = group.Key.SteamId64,
+                SteamId = group.Key.SteamId ?? string.Empty,
+                Name = GetMostCommonName(group),
+                CompoundScore = group.Average(chat => analyzer.PolarityScores(GetMessageBody(chat.Text)).Compound),
+                MessageCount = group.Count()
             })
             .OrderByDescending(x => x.CompoundScore)
             .ToList();
@@ -41,10 +50,38 @@ public class SentimentAnalysisJob : IJob
         await using var csv = new CsvWriter(writer, CultureInfo.InvariantCulture);
         await csv.WriteRecordsAsync(results, cancellationToken);
     }
+
+    private static string GetMessageBody(string text)
+    {
+        var marker = " : ";
+        var index = text.IndexOf(marker, StringComparison.Ordinal);
+        return index >= 0 ? text[(index + marker.Length)..] : text;
+    }
+
+    private static string GetMostCommonName(IEnumerable<ChatWithUser> group)
+    {
+        return group
+            .Where(item => !string.IsNullOrWhiteSpace(item.Name))
+            .GroupBy(item => item.Name)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .FirstOrDefault() ?? "unknown";
+    }
 }
 
 public class UserSentiment
 {
     public required string Name { get; set; }
+    public required string SteamId { get; set; }
+    public long? SteamId64 { get; set; }
     public required double CompoundScore { get; set; }
+    public int MessageCount { get; set; }
+}
+
+public class ChatWithUser
+{
+    public required string Text { get; set; }
+    public required string Name { get; set; }
+    public string? SteamId { get; set; }
+    public long? SteamId64 { get; set; }
 }

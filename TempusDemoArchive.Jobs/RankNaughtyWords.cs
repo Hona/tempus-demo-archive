@@ -18,21 +18,25 @@ public class RankNaughtyWords : IJob
         }
         
         var matching = await db.StvChats
-            .Where(x => !x.Text.StartsWith("Tip |"))
-            .Where(x => x.Text.StartsWith("* [") || x.Text.StartsWith("["))
-            .Where(x => EF.Functions.Like(x.Text, $"%]%:%{foundMessage}%"))
+            .Where(chat => chat.FromUserId != null)
+            .Where(chat => EF.Functions.Like(chat.Text, $"%{foundMessage}%"))
+            .Join(db.StvUsers.Where(user => user.UserId != null),
+                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
+                user => new { user.DemoId, UserId = user.UserId!.Value },
+                (chat, user) => new { chat.Text, user.Name, user.SteamId64, user.SteamIdClean, user.SteamId })
             .ToListAsync(cancellationToken: cancellationToken);
 
         var sb = new StringBuilder();
         
         foreach (var match in matching
-                     .GroupBy(x => x.Text.Split(']', 2).Last()
-                         .Split(":", 2, StringSplitOptions.RemoveEmptyEntries).First())
+                     .GroupBy(x => new { x.SteamId64, x.SteamIdClean, x.SteamId, x.Name })
                      .OrderByDescending(x => x.Count()))
         {
-            var playerName = match.Key;
+            var key = match.Key;
+            var steamId = key.SteamIdClean ?? key.SteamId ?? "unknown";
+            var name = string.IsNullOrWhiteSpace(key.Name) ? "unknown" : key.Name;
 
-            sb.AppendLine(playerName + " : " + match.Count());
+            sb.AppendLine($"{name} ({steamId}) : {match.Count()}");
         }
         
         var text = sb.ToString();

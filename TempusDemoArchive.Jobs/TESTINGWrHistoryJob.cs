@@ -9,7 +9,13 @@ public class TESTINGWrHistoryJob : IJob
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         Console.WriteLine("Input map name: ");
-        var map = Console.ReadLine();
+        var map = Console.ReadLine()?.Trim();
+
+        if (string.IsNullOrWhiteSpace(map))
+        {
+            Console.WriteLine("No map name provided.");
+            return;
+        }
 
         Console.WriteLine("Input class 'D' or 'S':");
         
@@ -69,7 +75,9 @@ public class TESTINGWrHistoryJob : IJob
                 .Select(x => GetDateFromTimestamp(x.Date))
                 .FirstOrDefaultAsync(cancellationToken);
             
-            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date, tuple.DemoId);
+            var identity = await ResolveUserIdentityAsync(db, tuple.DemoId, player, cancellationToken);
+            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date, tuple.DemoId,
+                identity?.SteamId64, identity?.SteamId);
             output.Add(entry);
         }
         
@@ -100,14 +108,16 @@ public class TESTINGWrHistoryJob : IJob
             var player = match.Groups[2].Value;
             var time = match.Groups[4].Value;
             var wrSplit = match.Groups[5].Value;
-            var prSplit = match.Groups[6].Value;
+            var prSplit = match.Groups[5].Value;
             
             var date = await db.Demos
                 .Where(x => x.Id == tuple.DemoId)
                 .Select(x => GetDateFromTimestamp(x.Date))
                 .FirstOrDefaultAsync(cancellationToken);
             
-            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date);
+            var identity = await ResolveUserIdentityAsync(db, tuple.DemoId, player, cancellationToken);
+            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date, tuple.DemoId,
+                identity?.SteamId64, identity?.SteamId);
             output.Add(entry);
         }
         
@@ -125,7 +135,9 @@ public class TESTINGWrHistoryJob : IJob
         
         foreach (var wrHistoryEntry in classOutput.OrderBy(x => x.Date))
         {
-            Console.WriteLine(wrHistoryEntry.Date?.ToString("yyyy-MM-dd") + " - " + wrHistoryEntry.Time + " - " + wrHistoryEntry.Player + $" ({wrHistoryEntry.DemoId})");
+            var date = wrHistoryEntry.Date?.ToString("yyyy-MM-dd") ?? "unknown";
+            var steam = wrHistoryEntry.SteamId64?.ToString() ?? wrHistoryEntry.SteamId ?? "unknown";
+            Console.WriteLine($"{date} - {wrHistoryEntry.Time} - {wrHistoryEntry.Player} ({wrHistoryEntry.DemoId}) [{steam}]");
         }
     }
     
@@ -136,5 +148,30 @@ public class TESTINGWrHistoryJob : IJob
 
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).DateTime;
     }
+
+    private static async Task<UserIdentity?> ResolveUserIdentityAsync(ArchiveDbContext db, ulong demoId, string player,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(player))
+        {
+            return null;
+        }
+
+        var matches = await db.StvUsers
+            .Where(user => user.DemoId == demoId)
+            .Where(user => EF.Functions.Like(user.Name, player))
+            .ToListAsync(cancellationToken);
+
+        if (matches.Count != 1)
+        {
+            return null;
+        }
+
+        var match = matches[0];
+        return new UserIdentity(match.SteamId64, match.SteamIdClean ?? match.SteamId);
+    }
 }
-public record WrHistoryEntry(string Player, string Class, string Time, string WrSplit, string PrSplit, DateTime? Date = null, ulong? DemoId = null);
+public record WrHistoryEntry(string Player, string Class, string Time, string WrSplit, string PrSplit,
+    DateTime? Date = null, ulong? DemoId = null, long? SteamId64 = null, string? SteamId = null);
+
+public record UserIdentity(long? SteamId64, string? SteamId);
