@@ -15,18 +15,33 @@ public class ComputeUserSentimentJob : IJob
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        var messages = await ArchiveQueries.ChatsWithUsers(db)
-            .ToListAsync(cancellationToken);
+        var aggregates = new Dictionary<(long? SteamId64, string SteamId), UserAggregate>();
 
-        var results = messages
-            .GroupBy(message => new { message.SteamId64, message.SteamId })
-            .Select(group => new UserSentiment
+        await foreach (var message in ArchiveQueries.ChatsWithUsers(db).AsAsyncEnumerable()
+                           .WithCancellation(cancellationToken))
+        {
+            var steamId = message.SteamId ?? "unknown";
+            var key = (message.SteamId64, steamId);
+
+            if (!aggregates.TryGetValue(key, out var aggregate))
             {
-                SteamId64 = group.Key.SteamId64,
-                SteamId = group.Key.SteamId ?? string.Empty,
-                Name = GetMostCommonName(group),
-                CompoundScore = group.Average(chat => analyzer.PolarityScores(ArchiveUtils.GetMessageBody(chat.Text)).Compound),
-                MessageCount = group.Count()
+                aggregate = new UserAggregate();
+                aggregates[key] = aggregate;
+            }
+
+            aggregate.Sum += analyzer.PolarityScores(ArchiveUtils.GetMessageBody(message.Text)).Compound;
+            aggregate.Count++;
+            aggregate.TrackName(message.Name);
+        }
+
+        var results = aggregates
+            .Select(entry => new UserSentiment
+            {
+                SteamId64 = entry.Key.SteamId64,
+                SteamId = entry.Key.SteamId,
+                Name = entry.Value.GetMostCommonName(),
+                CompoundScore = entry.Value.Count == 0 ? 0 : entry.Value.Sum / entry.Value.Count,
+                MessageCount = entry.Value.Count
             })
             .OrderByDescending(x => x.CompoundScore)
             .ToList();
@@ -40,14 +55,35 @@ public class ComputeUserSentimentJob : IJob
         await csv.WriteRecordsAsync(results, cancellationToken);
     }
 
-    private static string GetMostCommonName(IEnumerable<ChatWithUserRow> group)
+    private sealed class UserAggregate
     {
-        return group
-            .Where(item => !string.IsNullOrWhiteSpace(item.Name))
-            .GroupBy(item => item.Name)
-            .OrderByDescending(g => g.Count())
-            .Select(g => g.Key)
-            .FirstOrDefault() ?? "unknown";
+        public double Sum { get; set; }
+        public int Count { get; set; }
+        private readonly Dictionary<string, int> _nameCounts = new(StringComparer.OrdinalIgnoreCase);
+
+        public void TrackName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return;
+            }
+
+            if (_nameCounts.TryGetValue(name, out var current))
+            {
+                _nameCounts[name] = current + 1;
+                return;
+            }
+
+            _nameCounts[name] = 1;
+        }
+
+        public string GetMostCommonName()
+        {
+            return _nameCounts
+                .OrderByDescending(entry => entry.Value)
+                .Select(entry => entry.Key)
+                .FirstOrDefault() ?? "unknown";
+        }
     }
 }
 
