@@ -1,10 +1,11 @@
 using TempusApi;
+using System.Net;
+using System.Text.Json;
 using TempusApi.Enums;
 using TempusApi.Models.Activity;
 using TempusApi.Models.Responses;
-using ResponseZoneInfo = TempusApi.Models.Responses.ZoneInfo;
 using TempusDemoArchive.Persistence.Models;
-using System.Text.Json;
+using ResponseZoneInfo = TempusApi.Models.Responses.ZoneInfo;
 
 namespace TempusDemoArchive.Jobs;
 
@@ -13,6 +14,7 @@ public class CrawlRecordDemosJob : IJob
     private const int PageSize = 50;
     private const bool UseUnlimitedLimit = true;
     private const string StateFileName = "crawl-record-demos-state.json";
+    private const int DefaultMinIntervalMs = 200;
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -35,8 +37,14 @@ public class CrawlRecordDemosJob : IJob
             Console.WriteLine($"Resuming crawl at map {state.MapId}, zone {state.ZoneId}, start {state.Start}");
         }
 
-        using var httpClient = new HttpClient();
-        var client = new TempusClient(httpClient);
+        var rateLimitCounter = new RateLimitCounter();
+        var minIntervalMs = GetMinIntervalMs();
+        using var httpClient = new HttpClient(new RateLimitLoggingHandler(rateLimitCounter));
+        var client = new TempusClient(httpClient, new TempusClientOptions
+        {
+            MinimumRequestInterval = TimeSpan.FromMilliseconds(minIntervalMs)
+        });
+        Console.WriteLine($"Request interval: {minIntervalMs}ms");
 
         var mapIds = await GetMapIdsAsync(client, cancellationToken);
         Console.WriteLine($"Maps: {mapIds.Count}");
@@ -91,6 +99,7 @@ public class CrawlRecordDemosJob : IJob
             }
 
         Console.WriteLine($"New demos added: {totalAdded}");
+        Console.WriteLine($"429 responses: {rateLimitCounter.Count}");
     }
 
     private static CrawlState? LoadState()
@@ -313,5 +322,58 @@ public class CrawlRecordDemosJob : IJob
         foreach (var zone in overview.Zones.Trick ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
         foreach (var zone in overview.Zones.MapEnd ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
         foreach (var zone in overview.Zones.Misc ?? Enumerable.Empty<ResponseZoneInfo>()) yield return zone;
+    }
+
+    private static int GetMinIntervalMs()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_CRAWL_MIN_INTERVAL_MS");
+        if (int.TryParse(value, out var parsed) && parsed >= 0)
+        {
+            return parsed;
+        }
+
+        return DefaultMinIntervalMs;
+    }
+
+    private sealed class RateLimitCounter
+    {
+        private long _count;
+
+        public long Count => Interlocked.Read(ref _count);
+
+        public void Record(TimeSpan? retryAfter)
+        {
+            var current = Interlocked.Increment(ref _count);
+            if (current <= 3)
+            {
+                Console.WriteLine(retryAfter.HasValue
+                    ? $"Rate limited (Retry-After: {retryAfter.Value.TotalSeconds:n0}s)"
+                    : "Rate limited (Retry-After missing)");
+            }
+        }
+    }
+
+    private sealed class RateLimitLoggingHandler : DelegatingHandler
+    {
+        private readonly RateLimitCounter _counter;
+
+        public RateLimitLoggingHandler(RateLimitCounter counter)
+            : base(new HttpClientHandler())
+        {
+            _counter = counter;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                var retryAfter = response.Headers.RetryAfter?.Delta
+                                 ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow);
+                _counter.Record(retryAfter);
+            }
+
+            return response;
+        }
     }
 }
