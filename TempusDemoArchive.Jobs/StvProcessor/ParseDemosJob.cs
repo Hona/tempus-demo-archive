@@ -8,14 +8,19 @@ namespace TempusDemoArchive.Jobs.StvProcessor;
 
 public class ParseDemosJob : IJob
 {
-    private readonly int MaxConcurrentTasks = 5; // Adjust this value to change the degree of parallelism
-    private const int BatchSize = 200;
+    private const int DefaultParallelism = 5;
+    private const int DefaultBatchSize = 200;
     private const long SteamId64Base = 76561197960265728;
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
+        var parallelism = GetParallelism();
+        var batchSize = GetBatchSize();
+        Console.WriteLine($"Parse parallelism: {parallelism}");
+        Console.WriteLine($"Parse batch size: {batchSize}");
+
         var httpClient = new HttpClient();
-        var semaphore = new SemaphoreSlim(MaxConcurrentTasks);
+        var semaphore = new SemaphoreSlim(parallelism);
         var processedCount = 0;
 
         while (true)
@@ -34,7 +39,7 @@ public class ParseDemosJob : IJob
                 .OrderBy(x => x.Date)
                 .ThenBy(x => x.Id)
                 .Select(x => x.Id)
-                .Take(BatchSize)
+                .Take(batchSize)
                 .ToListAsync(cancellationToken);
 
             if (demoIds.Count == 0)
@@ -48,7 +53,7 @@ public class ParseDemosJob : IJob
                 try
                 {
                     var current = Interlocked.Increment(ref processedCount);
-                    Console.WriteLine($"Processing demo {current} (+- {MaxConcurrentTasks}) of {remaining} (ID: {demoId})");
+                    Console.WriteLine($"Processing demo {current} (+- {parallelism}) of {remaining} (ID: {demoId})");
 
                     await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false);
                 }
@@ -65,6 +70,28 @@ public class ParseDemosJob : IJob
 
             await Task.WhenAll(tasks);
         }
+    }
+
+    private static int GetParallelism()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_PARALLELISM");
+        if (int.TryParse(value, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return DefaultParallelism;
+    }
+
+    private static int GetBatchSize()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_BATCH_SIZE");
+        if (int.TryParse(value, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return DefaultBatchSize;
     }
 
     internal static async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
