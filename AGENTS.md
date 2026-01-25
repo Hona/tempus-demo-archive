@@ -7,11 +7,25 @@
   - API crawl via `CrawlRecordDemosJob` (records list + demo_info URLs).
 - **No API endpoint to list all demos**; best-effort crawl is via records API.
 
+## Domain Context (Tempus / TF2 Jump)
+- Tempus is a TF2 jump community; records are per **zone** and per **class** (soldier/demoman).
+- API returns **record lists** (PB per user) rather than every run.
+- Zones are grouped: map, course, bonus, trick, etc. (`fullOverview2` supplies zone IDs).
+- Demo URLs may point to **archive** or **rolling** buckets; filenames are not unique keys.
+
+## Repo Architecture
+- `TempusDemoArchive.Persistence` – EF Core models and migrations (SQLite).
+- `TempusDemoArchive.Jobs` – CLI jobs; interactive menu selects job by index.
+- Source of truth is `Demos` table; `StvProcessed` gates parsing.
+- Warnings-as-errors enabled on both Jobs and Persistence projects.
+
 ## Parser + Data Model
 - Parser now emits **raw events** to support later analytics:
   - `spawns[]`, `teamChanges[]`, `deaths[]`, `pauses[]` in JSON.
   - `chat.client` (SayText2 entity slot) and `users.entityId` are emitted for joinable chat.
 - DB stores **raw ingest** only; no derived playtime/spectator time is computed at ingest.
+- Steam IDs are preserved raw in `SteamId`, with normalized sidecars: `SteamIdClean`, `SteamId64`, `SteamIdKind`, `IsBot`.
+- Chat attribution is via `ClientEntityId`/`FromUserId`; `From` can be empty in raw messages.
 
 ## Cross‑Platform Parsing
 - `TempusDemoArchive.Jobs` uses **P/Invoke** to `tf_demo_parser` (no external exe).
@@ -21,6 +35,7 @@
 - Crawl state is saved after **every API page**: `~/.config/TempusDemoArchive/crawl-record-demos-state.json`.
 - `TEMPUS_CRAWL_RESET=1` restarts from scratch.
 - Dedupe is by **Demos.Id** (in‑memory HashSet + DB PK). Re‑runs are safe.
+- Unique‑constraint collisions are handled by filtering existing IDs and retrying the batch.
 - Duplicate **URLs** can exist with different IDs (rolling bucket collisions).
 
 ## Crawl Pagination Behavior
@@ -28,6 +43,10 @@
 - If `limit=0` returns >50 results, that zone is complete in one call.
 - Otherwise, page with `start/limit` until results are exhausted.
 - `start=1` is correct (API is effectively 1‑indexed).
+
+## Tempus API Quirks
+- `demo_info.start_tick` / `end_tick` can be **string** or **negative** in some records.
+- TempusApi `DemoInfo` uses nullable `long` with `JsonNumberHandling.AllowReadingFromString` (v4.0.4+).
 
 ## Rate Limits
 - 429s occur at 200ms intervals; use `TEMPUS_CRAWL_MIN_INTERVAL_MS` to tune.
@@ -43,3 +62,7 @@
   - `TEMPUS_REPARSE_DEMO_IDS` (explicit list)
   - `TEMPUS_REPARSE_LIMIT` (oldest N)
   - `TF_DEMO_PARSER_VERSION` (stamped into rows)
+
+## Parser Upstream
+- Canonical parser upstream: `https://codeberg.org/demostf/parser`.
+- FFI exports (`analyze_demo`, `free_string`) are merged into the fork and used for P/Invoke.
