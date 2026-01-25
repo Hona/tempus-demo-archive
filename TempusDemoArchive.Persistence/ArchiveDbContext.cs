@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using TempusDemoArchive.Persistence.Models;
 using TempusDemoArchive.Persistence.Models.STVs;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace TempusDemoArchive.Persistence;
 
@@ -23,6 +24,31 @@ public class ArchiveDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        if (Database.IsSqlite())
+        {
+            var ulongConverter = new ValueConverter<ulong, long>(
+                value => unchecked((long)value),
+                value => unchecked((ulong)value));
+            var nullableUlongConverter = new ValueConverter<ulong?, long?>(
+                value => value.HasValue ? unchecked((long)value.Value) : null,
+                value => value.HasValue ? unchecked((ulong)value.Value) : null);
+
+            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+            {
+                foreach (var property in entityType.GetProperties())
+                {
+                    if (property.ClrType == typeof(ulong))
+                    {
+                        property.SetValueConverter(ulongConverter);
+                    }
+                    else if (property.ClrType == typeof(ulong?))
+                    {
+                        property.SetValueConverter(nullableUlongConverter);
+                    }
+                }
+            }
+        }
         
         modelBuilder.Entity<Stv>().HasKey(stv => stv.DemoId);
         modelBuilder.Entity<StvChat>().HasKey(chat => new { chat.DemoId, chat.Index });
