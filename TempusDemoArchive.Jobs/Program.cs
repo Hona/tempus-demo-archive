@@ -1,9 +1,6 @@
-﻿/*#define PRESELECTED_JOB*/
-
 using System.Diagnostics;
 using Humanizer;
 using TempusDemoArchive.Jobs;
-using TempusDemoArchive.Jobs.StvProcessor;
 
 ArchivePath.EnsureAllCreated();
 
@@ -19,39 +16,12 @@ await using (var db = new ArchiveDbContext())
     await db.Database.MigrateAsync();
 }
 
-#if PRESELECTED_JOB
-var job = new SentimentAnalysis_PlayerSpecificJob();
-#else
-var jobs = new IJob[]
+var jobDefinitions = JobCatalog.All;
+var job = ResolveJob(args, jobDefinitions);
+if (job is null)
 {
-    new IngestJobList(),
-    new CrawlRecordDemosJob(),
-    new DemoProcessorJob(),
-    new ReparseProcessedDemosJob(),
-    new InfoJob(),
-    new FixupProcessedItemsJob(),
-    new ListUnprocessedDemos(),
-    new TESTINGWrHistoryJob(),
-    new ExportAllChatLogsFromMap(),
-    new MapNamesThatContain(),
-    new FirstBrazilWr(),
-    new ExportAllChatLogsFromUrls(),
-    new FindExactMessage(),
-    new GetUserChatLogs(),
-    new RankNaughtyWords(),
-    new SentimentAnalysisJob()
-};
-
-// User select a job
-Console.WriteLine("Select a job to run:");
-for (var i = 0; i < jobs.Length; i++)
-{
-    Console.WriteLine($"{i + 1}. {jobs[i].GetType().Name}");
+    return;
 }
-
-var jobIndex = int.Parse(Console.ReadLine() ?? "1") - 1;
-var job = jobs[jobIndex];
-#endif
 
 // Get console cancellationtoken
 var cts = new CancellationTokenSource();
@@ -68,3 +38,71 @@ await job.ExecuteAsync(cts.Token);
 stopwatch.Stop();
 
 Console.WriteLine("Done! Took " + stopwatch.Elapsed.Humanize(2));
+
+static IJob? ResolveJob(string[] args, IReadOnlyList<JobDefinition> jobs)
+{
+    if (args.Any(arg => string.Equals(arg, "--list", StringComparison.OrdinalIgnoreCase)))
+    {
+        foreach (var definition in jobs)
+        {
+            Console.WriteLine($"{definition.Id} - {definition.Description}");
+        }
+
+        return null;
+    }
+
+    var jobId = GetJobId(args);
+    if (!string.IsNullOrWhiteSpace(jobId))
+    {
+        var match = JobCatalog.Find(jobId);
+        if (match == null)
+        {
+            Console.WriteLine($"Unknown job id: {jobId}");
+            return null;
+        }
+
+        return match.Factory();
+    }
+
+    Console.WriteLine("Select a job to run:");
+    for (var i = 0; i < jobs.Count; i++)
+    {
+        var definition = jobs[i];
+        Console.WriteLine($"{i + 1}. {definition.DisplayName} ({definition.Id})");
+    }
+
+    if (!int.TryParse(Console.ReadLine(), out var jobIndex))
+    {
+        Console.WriteLine("Invalid selection.");
+        return null;
+    }
+
+    jobIndex -= 1;
+    if (jobIndex < 0 || jobIndex >= jobs.Count)
+    {
+        Console.WriteLine("Invalid selection.");
+        return null;
+    }
+
+    return jobs[jobIndex].Factory();
+}
+
+static string? GetJobId(string[] args)
+{
+    for (var i = 0; i < args.Length; i++)
+    {
+        var arg = args[i];
+        if (string.Equals(arg, "--job", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+        {
+            return args[i + 1];
+        }
+
+        const string prefix = "--job=";
+        if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return arg.Substring(prefix.Length);
+        }
+    }
+
+    return null;
+}
