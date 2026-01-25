@@ -41,12 +41,12 @@ public class ReparseDemosJob : IJob
             }
 
             var lastIdLong = lastId > long.MaxValue ? long.MaxValue : (long)lastId;
+            var batchLimit = Math.Min(BatchSize, remainingLimit);
             var batch = await db.Demos
-                .Where(demo => demo.StvProcessed)
-                .Where(demo => EF.Property<long>(demo, "Id") > lastIdLong)
-                .OrderBy(demo => EF.Property<long>(demo, "Id"))
+                .FromSqlRaw("SELECT * FROM Demos WHERE StvProcessed = 1 AND Id > {0} ORDER BY Id LIMIT {1}",
+                    lastIdLong, batchLimit)
+                .AsNoTracking()
                 .Select(demo => demo.Id)
-                .Take(Math.Min(BatchSize, remainingLimit))
                 .ToListAsync(cancellationToken);
 
             if (batch.Count == 0)
