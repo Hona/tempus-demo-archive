@@ -26,6 +26,7 @@ public class CrawlRecordDemosJob : IJob
         var resumeMapId = state?.MapId;
         var resumeZoneId = state?.ZoneId;
         var resumeStart = state?.Start ?? 1;
+        var resumeZoneComplete = state?.ZoneComplete ?? false;
         var resumeMapReached = resumeMapId == null;
         var resumeZoneReached = resumeZoneId == null;
 
@@ -78,6 +79,10 @@ public class CrawlRecordDemosJob : IJob
                         }
 
                         resumeZoneReached = true;
+                        if (resumeZoneComplete)
+                        {
+                            continue;
+                        }
                     }
 
                     var start = mapId == resumeMapId && zoneId == resumeZoneId ? resumeStart : 1;
@@ -118,7 +123,7 @@ public class CrawlRecordDemosJob : IJob
 
     private static string StateFilePath => Path.Combine(ArchivePath.Root, StateFileName);
 
-    private sealed record CrawlState(long MapId, long ZoneId, int Start, DateTimeOffset UpdatedAt);
+    private sealed record CrawlState(long MapId, long ZoneId, int Start, bool ZoneComplete, DateTimeOffset UpdatedAt);
 
     private async Task<int> PersistDemosAsync(ArchiveDbContext db, List<Demo> newDemos, CancellationToken cancellationToken)
     {
@@ -170,18 +175,23 @@ public class CrawlRecordDemosJob : IJob
 
             if (records.Runs == null)
             {
+                SaveState(new CrawlState(mapId, zoneId, currentStart, true, DateTimeOffset.UtcNow));
                 return totalAdded;
             }
 
             var pageKey = GetPageKey(records.Runs);
             if (pageKey == previousPageKey)
             {
+                SaveState(new CrawlState(mapId, zoneId, currentStart, true, DateTimeOffset.UtcNow));
                 return totalAdded;
             }
 
             previousPageKey = pageKey;
+            SaveState(new CrawlState(mapId, zoneId, currentStart, false, DateTimeOffset.UtcNow));
 
-            var recordCount = GetRecordCount(records.Runs);
+            var (soldierCount, demomanCount) = GetRecordCounts(records.Runs);
+            var hasUnlimitedResults = soldierCount > PageSize || demomanCount > PageSize;
+            var hasMorePages = soldierCount == PageSize || demomanCount == PageSize;
 
             var newDemos = new List<Demo>();
             foreach (var demoEntry in ExtractDemoEntries(records.Runs))
@@ -204,22 +214,27 @@ public class CrawlRecordDemosJob : IJob
 
             if (useUnlimited)
             {
-                if (recordCount < PageSize || recordCount > PageSize)
+                if (hasUnlimitedResults)
                 {
-                    SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
+                    SaveState(new CrawlState(mapId, zoneId, currentStart, true, DateTimeOffset.UtcNow));
                     return totalAdded;
                 }
 
                 useUnlimited = false;
+                if (!hasMorePages)
+                {
+                    SaveState(new CrawlState(mapId, zoneId, currentStart, true, DateTimeOffset.UtcNow));
+                    return totalAdded;
+                }
             }
-            else if (recordCount < PageSize)
+            else if (!hasMorePages)
             {
-                SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
+                SaveState(new CrawlState(mapId, zoneId, currentStart, true, DateTimeOffset.UtcNow));
                 return totalAdded;
             }
 
             currentStart += PageSize;
-            SaveState(new CrawlState(mapId, zoneId, currentStart, DateTimeOffset.UtcNow));
+            SaveState(new CrawlState(mapId, zoneId, currentStart, false, DateTimeOffset.UtcNow));
         }
     }
 
@@ -248,11 +263,11 @@ public class CrawlRecordDemosJob : IJob
         }
     }
 
-    private static int GetRecordCount(ZonedResults results)
+    private static (int Soldier, int Demoman) GetRecordCounts(ZonedResults results)
     {
         var soldierCount = results.SoldierRuns?.Count ?? 0;
         var demomanCount = results.DemomanRuns?.Count ?? 0;
-        return soldierCount + demomanCount;
+        return (soldierCount, demomanCount);
     }
 
     private static string? GetPageKey(ZonedResults results)
