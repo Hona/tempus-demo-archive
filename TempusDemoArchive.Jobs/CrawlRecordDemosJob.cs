@@ -23,7 +23,8 @@ public class CrawlRecordDemosJob : IJob
         db.ChangeTracker.AutoDetectChangesEnabled = false;
 
         var existingIds = db.Demos.Select(x => x.Id).ToHashSet();
-        Console.WriteLine($"Existing demos: {existingIds.Count}");
+        var startingCount = existingIds.Count;
+        Console.WriteLine($"Existing demos: {startingCount}");
 
         var state = LoadState();
         var resumeMapId = state?.MapId;
@@ -57,6 +58,8 @@ public class CrawlRecordDemosJob : IJob
         foreach (var mapId in mapIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            var mapTotalBefore = totalAdded;
 
                 if (!resumeMapReached)
                 {
@@ -97,6 +100,10 @@ public class CrawlRecordDemosJob : IJob
                     var start = mapId == resumeMapId && zoneId == resumeZoneId ? resumeStart : 1;
                     totalAdded += await ProcessZoneAsync(client, mapId, zoneId, start, existingIds, db, cancellationToken);
                 }
+
+                var mapAdded = totalAdded - mapTotalBefore;
+                var currentTotal = startingCount + totalAdded;
+                Console.WriteLine($"Map {mapIndex}/{mapIds.Count}: added {mapAdded} demos (total {currentTotal})");
             }
 
         Console.WriteLine($"New demos added: {totalAdded}");
