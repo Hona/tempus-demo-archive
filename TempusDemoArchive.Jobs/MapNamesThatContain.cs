@@ -7,6 +7,12 @@ public class MapNamesThatContain : IJob
         Console.WriteLine("Maps might be renamed over time - so this will return all STV maps that contain the input string");
         Console.WriteLine("Input Map name: ");
         var mapName = Console.ReadLine()?.Trim();
+
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            Console.WriteLine("No map name provided.");
+            return;
+        }
         
         await using var db = new ArchiveDbContext();
         

@@ -116,12 +116,12 @@ public class TESTINGWrHistoryJob : IJob
             .OrderByDescending(x => x.Time)
             .ToList();
 
-        var classOutput = orderedOutput
-            .Where(x => x.Class == @class switch
-            {
-                "S" => soldier,
-                "D" => demoman,
-            });
+        var classOutput = @class switch
+        {
+            "S" => orderedOutput.Where(x => x.Class == soldier),
+            "D" => orderedOutput.Where(x => x.Class == demoman),
+            _ => Enumerable.Empty<WrHistoryEntry>()
+        };
         
         foreach (var wrHistoryEntry in classOutput.OrderBy(x => x.Date))
         {

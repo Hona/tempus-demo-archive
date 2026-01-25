@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.Json;
+using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs;
 
@@ -25,23 +26,30 @@ public class FindExactMessage : IJob
         if (matching.Count == 1)
         {
             var found = matching[0];
-            
-            found.Stv = db.Stvs.FirstOrDefault(x => x.DemoId == found.DemoId);
-            found.Stv.Chats = null;
-            found.Stv.Demo = null;
+
+            var stv = db.Stvs.FirstOrDefault(x => x.DemoId == found.DemoId);
+            if (stv != null)
+            {
+                stv.Chats = new List<StvChat>();
+                stv.Demo = null;
+                found.Stv = stv;
+            }
             
             Console.WriteLine(JsonSerializer.Serialize(found, options: new JsonSerializerOptions
             {
                 WriteIndented = true
             }));
-            
+
             var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == found.DemoId, cancellationToken: cancellationToken);
 
-            demo.Stv = null;
-            Console.WriteLine(JsonSerializer.Serialize(demo, options: new JsonSerializerOptions
+            if (demo != null)
             {
-                WriteIndented = true
-            }));
+                demo.Stv = null;
+                Console.WriteLine(JsonSerializer.Serialize(demo, options: new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                }));
+            }
         }
 
         if (matching.Count > 1)
@@ -52,7 +60,8 @@ public class FindExactMessage : IJob
             foreach (var match in matching)
             {
                 var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == match.DemoId, cancellationToken: cancellationToken);
-                stringBuilder.AppendLine(TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date) + ": " +match.Text);
+                var date = demo == null ? "unknown" : TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date).ToString("yyyy-MM-dd");
+                stringBuilder.AppendLine(date + ": " + match.Text);
             }
 
             stringBuilder.AppendLine("Total matches: " + matching.Count);

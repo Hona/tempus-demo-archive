@@ -10,6 +10,12 @@ public class RankNaughtyWords : IJob
 
         Console.WriteLine("Input naughty word: ");
         var foundMessage = Console.ReadLine();
+
+        if (string.IsNullOrWhiteSpace(foundMessage))
+        {
+            Console.WriteLine("No word provided.");
+            return;
+        }
         
         var matching = await db.StvChats
             .Where(x => !x.Text.StartsWith("Tip |"))

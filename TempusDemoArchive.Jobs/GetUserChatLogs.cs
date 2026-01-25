@@ -9,12 +9,26 @@ public class GetUserChatLogs : IJob
         Console.WriteLine("Enter steam ID in format e.g. 'STEAM_0:0:27790406'");
         var steamId = Console.ReadLine();
 
+        if (string.IsNullOrWhiteSpace(steamId))
+        {
+            Console.WriteLine("No steam ID provided.");
+            return;
+        }
+
         await using var db = new ArchiveDbContext();
-        
-        var matching = db.StvChats
-            .Where(x => x.From == x.Stv.Users.FirstOrDefault(x => x.SteamId == steamId).UserId.ToString())
-            .Where(x => !x.Text.StartsWith("Tip |"))
-            .ToList();
+
+        var userQuery = db.StvUsers
+            .Where(user => user.UserId != null)
+            .Where(user => user.SteamId == steamId || user.SteamIdClean == steamId);
+
+        var matching = await db.StvChats
+            .Where(chat => chat.FromUserId != null)
+            .Join(userQuery,
+                chat => new { chat.DemoId, UserId = chat.FromUserId!.Value },
+                user => new { user.DemoId, UserId = user.UserId!.Value },
+                (chat, _) => chat)
+            .Where(chat => !chat.Text.StartsWith("Tip |"))
+            .ToListAsync(cancellationToken);
         
         var stringBuilder = new StringBuilder();
         
@@ -23,7 +37,8 @@ public class GetUserChatLogs : IJob
         foreach (var match in matching)
         {
             var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == match.DemoId, cancellationToken: cancellationToken);
-            stringBuilder.AppendLine(TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date) + ": " +match.Text);
+            var date = demo == null ? "unknown" : TESTINGWrHistoryJob.GetDateFromTimestamp(demo.Date).ToString("yyyy-MM-dd");
+            stringBuilder.AppendLine(date + ": " + match.Text);
         }
         
         stringBuilder.AppendLine("Total matches: " + matching.Count);

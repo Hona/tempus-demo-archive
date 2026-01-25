@@ -11,7 +11,13 @@ public class ExportAllChatLogsFromUrls : IJob
     {
         Console.WriteLine("Input demo urls separated by commas");
         var input = Console.ReadLine();
-        var urls = input.Split("\n");
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            Console.WriteLine("No URLs provided.");
+            return;
+        }
+
+        var urls = input.Split(new[] { ',', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         
         var chatLogs = new List<StvChat>();
 
@@ -19,8 +25,8 @@ public class ExportAllChatLogsFromUrls : IJob
         
         foreach (var url in urls)
         {
-            var chatLog = await db.Demos.Where(x => x.Url == url)
-                .SelectMany(x => x.Stv.Chats)
+            var chatLog = await db.Demos.Where(x => x.Url == url && x.Stv != null)
+                .SelectMany(x => x.Stv!.Chats)
                 .ToListAsync(cancellationToken: cancellationToken);
             chatLogs.AddRange(chatLog);
         }
