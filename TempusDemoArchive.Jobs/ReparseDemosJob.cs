@@ -6,16 +6,22 @@ public class ReparseDemosJob : IJob
 {
     private readonly int MaxConcurrentTasks = 3;
     private const int BatchSize = 200;
+    private const int DefaultLogEvery = 50;
     private const string StateFileName = "reparse-demos-state.json";
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         using var httpClient = new HttpClient();
         var semaphore = new SemaphoreSlim(MaxConcurrentTasks);
+        var logEvery = GetLogEvery();
+        var verbose = GetVerbose();
+        Console.WriteLine($"Reparse log every: {logEvery}");
+        Console.WriteLine($"Reparse verbose: {verbose}");
+
         var explicitIds = GetExplicitDemoIds();
         if (explicitIds != null)
         {
-            await ProcessBatchesAsync(explicitIds, explicitIds.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks);
+            await ProcessBatchesAsync(explicitIds, explicitIds.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
             return;
         }
 
@@ -53,13 +59,14 @@ public class ReparseDemosJob : IJob
                 break;
             }
 
-            processed += await ProcessBatchesAsync(batch, processed + batch.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks);
+            processed += await ProcessBatchesAsync(batch, processed + batch.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks, logEvery, verbose);
             SaveState(new ReparseState(processed, DateTimeOffset.UtcNow));
         }
     }
 
     private static async Task<int> ProcessBatchesAsync(IReadOnlyList<ulong> demoIds, int total,
-        HttpClient httpClient, SemaphoreSlim semaphore, CancellationToken cancellationToken, int maxConcurrentTasks)
+        HttpClient httpClient, SemaphoreSlim semaphore, CancellationToken cancellationToken, int maxConcurrentTasks,
+        int logEvery, bool verbose)
     {
         var counter = 0;
         var tasks = demoIds.Select(async demoId =>
@@ -68,8 +75,12 @@ public class ReparseDemosJob : IJob
             try
             {
                 var current = Interlocked.Increment(ref counter);
-                Console.WriteLine($"Reparsing demo {current} (+- {maxConcurrentTasks}) of {total} (ID: {demoId})");
-                await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true);
+                if (logEvery > 0 && (current == 1 || current % logEvery == 0))
+                {
+                    Console.WriteLine($"Reparsed {current} demos (total batch target {total})");
+                }
+
+                await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true, verbose: verbose);
             }
             catch (Exception e)
             {
@@ -107,6 +118,23 @@ public class ReparseDemosJob : IJob
     {
         var value = Environment.GetEnvironmentVariable("TEMPUS_REPARSE_LIMIT");
         return int.TryParse(value, out var parsed) ? parsed : 0;
+    }
+
+    private static int GetLogEvery()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_REPARSE_LOG_EVERY");
+        if (int.TryParse(value, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return DefaultLogEvery;
+    }
+
+    private static bool GetVerbose()
+    {
+        return string.Equals(Environment.GetEnvironmentVariable("TEMPUS_REPARSE_VERBOSE"), "1",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static ReparseState? LoadState()

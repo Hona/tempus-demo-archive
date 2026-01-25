@@ -45,10 +45,14 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 - `TEMPUS_REPARSE_DEMO_IDS=1,2,3` (explicit list)
 - `TEMPUS_REPARSE_LIMIT=10` (oldest N processed)
 - `TF_DEMO_PARSER_VERSION=...` (stamp parsed rows)
+- `TEMPUS_REPARSE_LOG_EVERY=50`
+- `TEMPUS_REPARSE_VERBOSE=1`
 
 ## Parse Controls
 - `TEMPUS_PARSE_PARALLELISM=8` (default 5)
 - `TEMPUS_PARSE_BATCH_SIZE=200` (default 200)
+- `TEMPUS_PARSE_LOG_EVERY=50`
+- `TEMPUS_PARSE_VERBOSE=1`
 
 ## Schema Highlights (Raw Event Storage)
 - `StvUsers` includes `EntityId`, `SteamIdClean`, `SteamId64`, `SteamIdKind`, `IsBot`

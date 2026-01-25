@@ -73,7 +73,6 @@ public class CrawlRecordDemosJob : IJob
                 }
 
                 mapIndex++;
-                Console.WriteLine($"Map {mapIndex}/{mapIds.Count}: {mapId}");
 
                 var zoneIds = await GetZoneIdsAsync(client, mapId, cancellationToken);
                 foreach (var zoneId in zoneIds)

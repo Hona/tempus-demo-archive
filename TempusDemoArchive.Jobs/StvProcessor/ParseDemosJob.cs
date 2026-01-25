@@ -10,14 +10,19 @@ public class ParseDemosJob : IJob
 {
     private const int DefaultParallelism = 5;
     private const int DefaultBatchSize = 200;
+    private const int DefaultLogEvery = 50;
     private const long SteamId64Base = 76561197960265728;
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         var parallelism = GetParallelism();
         var batchSize = GetBatchSize();
+        var logEvery = GetLogEvery();
+        var verbose = GetVerbose();
         Console.WriteLine($"Parse parallelism: {parallelism}");
         Console.WriteLine($"Parse batch size: {batchSize}");
+        Console.WriteLine($"Parse log every: {logEvery}");
+        Console.WriteLine($"Parse verbose: {verbose}");
 
         var httpClient = new HttpClient();
         var semaphore = new SemaphoreSlim(parallelism);
@@ -53,9 +58,12 @@ public class ParseDemosJob : IJob
                 try
                 {
                     var current = Interlocked.Increment(ref processedCount);
-                    Console.WriteLine($"Processing demo {current} (+- {parallelism}) of {remaining} (ID: {demoId})");
+                    if (logEvery > 0 && (current == 1 || current % logEvery == 0))
+                    {
+                        Console.WriteLine($"Processed {current} demos (remaining ~{remaining})");
+                    }
 
-                    await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false);
+                    await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false, verbose: verbose);
                 }
                 catch (Exception e)
                 {
@@ -94,8 +102,25 @@ public class ParseDemosJob : IJob
         return DefaultBatchSize;
     }
 
+    private static int GetLogEvery()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_LOG_EVERY");
+        if (int.TryParse(value, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return DefaultLogEvery;
+    }
+
+    private static bool GetVerbose()
+    {
+        return string.Equals(Environment.GetEnvironmentVariable("TEMPUS_PARSE_VERBOSE"), "1",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
-        CancellationToken cancellationToken, bool forceReparse)
+        CancellationToken cancellationToken, bool forceReparse, bool verbose)
     {
         var stopwatch = Stopwatch.StartNew();
         
@@ -126,8 +151,11 @@ public class ParseDemosJob : IJob
 
         var downloadSizeBytes = downloadResponse.Content.Headers.ContentLength;
 
-        Console.WriteLine("Downloading demo: " +
-                          downloadSizeBytes.GetValueOrDefault().Bytes());
+        if (verbose)
+        {
+            Console.WriteLine("Downloading demo: " +
+                              downloadSizeBytes.GetValueOrDefault().Bytes());
+        }
 
         // Skip if 1 MB - probably corrupted
         if (downloadSizeBytes < 1 * 1024 * 1024)
@@ -146,16 +174,25 @@ public class ParseDemosJob : IJob
             {
                 await using (var sw = File.OpenWrite(filePath))
                 {
-                    Console.WriteLine("Extracting demo: " + entry.Length.Bytes());
+                    if (verbose)
+                    {
+                        Console.WriteLine("Extracting demo: " + entry.Length.Bytes());
+                    }
                     await sr.BaseStream.CopyToAsync(sw, cancellationToken);
                 }
             }
         }
 
-        Console.WriteLine("Extracting STV data");
+        if (verbose)
+        {
+            Console.WriteLine("Extracting STV data");
+        }
         var output = StvParser.ExtractStvData(filePath);
 
-        Console.WriteLine("Mapping to DB model");
+        if (verbose)
+        {
+            Console.WriteLine("Mapping to DB model");
+        }
         var entityToUserId = output.Users.Values
             .Where(user => user.EntityId.HasValue && user.UserId.HasValue)
             .GroupBy(user => user.EntityId!.Value)
@@ -263,14 +300,23 @@ public class ParseDemosJob : IJob
         db.Add(stv);
         demoEntry.StvProcessed = true;
 
-        Console.WriteLine("Deleting demo file");
+        if (verbose)
+        {
+            Console.WriteLine("Deleting demo file");
+        }
 
         File.Delete(filePath);
 
-        Console.WriteLine("Saving changes");
+        if (verbose)
+        {
+            Console.WriteLine("Saving changes");
+        }
 
         await db.SaveChangesAsync(cancellationToken);
-        Console.WriteLine("Done. Took " + stopwatch.Elapsed.Humanize(2) + "\n");
+        if (verbose)
+        {
+            Console.WriteLine("Done. Took " + stopwatch.Elapsed.Humanize(2) + "\n");
+        }
     }
 
     private static (string? Clean, long? SteamId64, string? Kind, bool? IsBot) NormalizeSteamId(string? steamId)
