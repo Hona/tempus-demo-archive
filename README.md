@@ -23,6 +23,12 @@ Run interactive jobs:
 dotnet run --project TempusDemoArchive.Jobs
 ```
 
+List jobs or run by id:
+```
+dotnet run --project TempusDemoArchive.Jobs -- --list
+dotnet run --project TempusDemoArchive.Jobs -- --job crawl-record-demos
+```
+
 Data root:
 - `~/.config/TempusDemoArchive/`
 - DB: `tempus-demo-archive.db`
@@ -47,6 +53,7 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 - `TF_DEMO_PARSER_VERSION=...` (stamp parsed rows)
 - `TEMPUS_REPARSE_LOG_EVERY=50`
 - `TEMPUS_REPARSE_VERBOSE=1`
+- State file: `~/.config/TempusDemoArchive/reparse-demos-state.json`
 
 ## Parse Controls
 - `TEMPUS_PARSE_PARALLELISM=8` (default 5)
@@ -58,6 +65,10 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 - `StvUsers` includes `EntityId`, `SteamIdClean`, `SteamId64`, `SteamIdKind`, `IsBot`
 - `StvChats` includes `ClientEntityId`, `FromUserId` (joinable to users)
 - `StvSpawns`, `StvTeamChanges`, `StvDeaths`, `StvPauses` are raw timeline events
+
+## Notes
+- Some chat rows have `ClientEntityId` but no `FromUserId` because entity ids can be reused; mapping is skipped when ambiguous.
+- SQLite stores ids as `INTEGER` with a ulong↔long converter to keep queries translatable.
 
 ## Dedupe Guarantee
 - Demos are deduped by `Demos.Id` (in-memory HashSet + DB PK).

@@ -15,7 +15,7 @@
 
 ## Repo Architecture
 - `TempusDemoArchive.Persistence` – EF Core models and migrations (SQLite).
-- `TempusDemoArchive.Jobs` – CLI jobs; interactive menu selects job by index.
+- `TempusDemoArchive.Jobs` – CLI jobs; job catalog supports `--list` and `--job <id>`.
 - Source of truth is `Demos` table; `StvProcessed` gates parsing.
 - Warnings-as-errors enabled on both Jobs and Persistence projects.
 
@@ -26,6 +26,8 @@
 - DB stores **raw ingest** only; no derived playtime/spectator time is computed at ingest.
 - Steam IDs are preserved raw in `SteamId`, with normalized sidecars: `SteamIdClean`, `SteamId64`, `SteamIdKind`, `IsBot`.
 - Chat attribution is via `ClientEntityId`/`FromUserId`; `From` can be empty in raw messages.
+- Entity ids can be **reused** in demos; when a `ClientEntityId` maps to multiple users, `FromUserId` is left null.
+- Deterministic chat attribution would require storing userinfo events over time.
 
 ## Cross‑Platform Parsing
 - `TempusDemoArchive.Jobs` uses **P/Invoke** to `tf_demo_parser` (no external exe).
@@ -62,6 +64,12 @@
   - `TEMPUS_REPARSE_DEMO_IDS` (explicit list)
   - `TEMPUS_REPARSE_LIMIT` (oldest N)
   - `TF_DEMO_PARSER_VERSION` (stamped into rows)
+- State file: `~/.config/TempusDemoArchive/reparse-demos-state.json` (offset based).
+- Parse logging controls: `TEMPUS_PARSE_LOG_EVERY`, `TEMPUS_PARSE_VERBOSE`.
+- Reparse logging controls: `TEMPUS_REPARSE_LOG_EVERY`, `TEMPUS_REPARSE_VERBOSE`.
+
+## SQLite / EF Core
+- SQLite can’t ORDER BY `ulong` directly; global value converter maps `ulong` ↔ `long` for all entities.
 
 ## Parser Upstream
 - Canonical parser upstream: `https://codeberg.org/demostf/parser`.
