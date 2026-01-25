@@ -9,42 +9,62 @@ namespace TempusDemoArchive.Jobs.StvProcessor;
 public class ParseDemosJob : IJob
 {
     private readonly int MaxConcurrentTasks = 5; // Adjust this value to change the degree of parallelism
+    private const int BatchSize = 200;
     private const long SteamId64Base = 76561197960265728;
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        await using var db = new ArchiveDbContext();
         var httpClient = new HttpClient();
         var semaphore = new SemaphoreSlim(MaxConcurrentTasks);
+        var processedCount = 0;
 
-        var demosToProcess = db.Demos.Where(x => !x.StvProcessed).ToList();
-        var unprocessedDemos = demosToProcess.Count;
-
-        int counter = 1;
-
-        var tasks = demosToProcess.Select(async demoEntry =>
+        while (true)
         {
-            await semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                Console.WriteLine($"Processing demo {counter} (+- {MaxConcurrentTasks}) of {unprocessedDemos} (ID: {demoEntry.Id})");
+            cancellationToken.ThrowIfCancellationRequested();
 
-                await ProcessDemoAsync(demoEntry.Id, httpClient, cancellationToken, forceReparse: false);
-
-                counter++;
-            }
-            catch (Exception e)
+            await using var db = new ArchiveDbContext();
+            var remaining = await db.Demos.CountAsync(x => !x.StvProcessed, cancellationToken);
+            if (remaining == 0)
             {
-                Console.WriteLine("Error processing demo: " + demoEntry.Id);
-                Console.WriteLine(e);
+                break;
             }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
 
-        await Task.WhenAll(tasks);
+            var demoIds = await db.Demos
+                .Where(x => !x.StvProcessed)
+                .OrderBy(x => x.Date)
+                .ThenBy(x => x.Id)
+                .Select(x => x.Id)
+                .Take(BatchSize)
+                .ToListAsync(cancellationToken);
+
+            if (demoIds.Count == 0)
+            {
+                break;
+            }
+
+            var tasks = demoIds.Select(async demoId =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
+                try
+                {
+                    var current = Interlocked.Increment(ref processedCount);
+                    Console.WriteLine($"Processing demo {current} (+- {MaxConcurrentTasks}) of {remaining} (ID: {demoId})");
+
+                    await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false);
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Error processing demo: " + demoId);
+                    Console.WriteLine(e);
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
     }
 
     internal static async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
