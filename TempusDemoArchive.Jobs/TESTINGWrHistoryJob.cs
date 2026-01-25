@@ -69,7 +69,7 @@ public class TESTINGWrHistoryJob : IJob
                 .Select(x => GetDateFromTimestamp(x.Date))
                 .FirstOrDefaultAsync(cancellationToken);
             
-            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date);
+            var entry = new WrHistoryEntry(player, detectedClass, time, wrSplit, prSplit, date, tuple.DemoId);
             output.Add(entry);
         }
         
@@ -125,7 +125,7 @@ public class TESTINGWrHistoryJob : IJob
         
         foreach (var wrHistoryEntry in classOutput.OrderBy(x => x.Date))
         {
-            Console.WriteLine(wrHistoryEntry.Date?.ToString("yyyy-MM-dd") + " - " + wrHistoryEntry.Time + " - " + wrHistoryEntry.Player);
+            Console.WriteLine(wrHistoryEntry.Date?.ToString("yyyy-MM-dd") + " - " + wrHistoryEntry.Time + " - " + wrHistoryEntry.Player + $" ({wrHistoryEntry.DemoId})");
         }
     }
     
@@ -137,4 +137,4 @@ public class TESTINGWrHistoryJob : IJob
         return DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).DateTime;
     }
 }
-public record WrHistoryEntry(string Player, string Class, string Time, string WrSplit, string PrSplit, DateTime? Date = null);
+public record WrHistoryEntry(string Player, string Class, string Time, string WrSplit, string PrSplit, DateTime? Date = null, ulong? DemoId = null);

@@ -1,4 +1,4 @@
-﻿
+﻿/*#define PRESELECTED_JOB*/
 
 using System.Diagnostics;
 using Humanizer;
@@ -19,6 +19,9 @@ await using (var db = new ArchiveDbContext())
     await db.Database.MigrateAsync();
 }
 
+#if PRESELECTED_JOB
+var job = new SentimentAnalysis_PlayerSpecificJob();
+#else
 var jobs = new IJob[]
 {
     new IngestJobList(),
@@ -34,7 +37,8 @@ var jobs = new IJob[]
     new ExportAllChatLogsFromUrls(),
     new FindExactMessage(),
     new GetUserChatLogs(),
-    new RankNaughtyWords()
+    new RankNaughtyWords(),
+    new SentimentAnalysisJob()
 };
 
 // User select a job
@@ -46,6 +50,7 @@ for (var i = 0; i < jobs.Length; i++)
 
 var jobIndex = int.Parse(Console.ReadLine() ?? "1") - 1;
 var job = jobs[jobIndex];
+#endif
 
 // Get console cancellationtoken
 var cts = new CancellationTokenSource();
