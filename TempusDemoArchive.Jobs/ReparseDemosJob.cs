@@ -20,13 +20,12 @@ public class ReparseDemosJob : IJob
         }
 
         var state = LoadState();
-        var lastId = state?.LastDemoId ?? 0;
         var processed = state?.ProcessedCount ?? 0;
         var limit = GetLimit();
 
         if (state != null)
         {
-            Console.WriteLine($"Resuming reparse at demo {lastId} (processed {processed})");
+            Console.WriteLine($"Resuming reparse at offset {processed}");
         }
 
         while (true)
@@ -40,13 +39,13 @@ public class ReparseDemosJob : IJob
                 break;
             }
 
-            var lastIdLong = lastId > long.MaxValue ? long.MaxValue : (long)lastId;
             var batchLimit = Math.Min(BatchSize, remainingLimit);
             var batch = await db.Demos
-                .FromSqlRaw("SELECT * FROM Demos WHERE StvProcessed = 1 AND Id > {0} ORDER BY Id LIMIT {1}",
-                    lastIdLong, batchLimit)
-                .AsNoTracking()
+                .Where(demo => demo.StvProcessed)
+                .OrderBy(demo => demo.Id)
                 .Select(demo => demo.Id)
+                .Skip(processed)
+                .Take(batchLimit)
                 .ToListAsync(cancellationToken);
 
             if (batch.Count == 0)
@@ -55,8 +54,7 @@ public class ReparseDemosJob : IJob
             }
 
             processed += await ProcessBatchesAsync(batch, processed + batch.Count, httpClient, semaphore, cancellationToken, MaxConcurrentTasks);
-            lastId = batch.Last();
-            SaveState(new ReparseState(lastId, processed, DateTimeOffset.UtcNow));
+            SaveState(new ReparseState(processed, DateTimeOffset.UtcNow));
         }
     }
 
@@ -141,5 +139,5 @@ public class ReparseDemosJob : IJob
 
     private static string StateFilePath => Path.Combine(ArchivePath.Root, StateFileName);
 
-    private sealed record ReparseState(ulong LastDemoId, int ProcessedCount, DateTimeOffset UpdatedAt);
+    private sealed record ReparseState(int ProcessedCount, DateTimeOffset UpdatedAt);
 }
