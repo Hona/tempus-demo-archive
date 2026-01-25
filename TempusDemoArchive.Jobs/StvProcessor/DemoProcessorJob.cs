@@ -111,7 +111,9 @@ public class DemoProcessorJob : IJob
         Console.WriteLine("Mapping to DB model");
         var entityToUserId = output.Users.Values
             .Where(user => user.EntityId.HasValue && user.UserId.HasValue)
-            .ToDictionary(user => user.EntityId!.Value, user => user.UserId!.Value);
+            .GroupBy(user => user.EntityId!.Value)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().UserId!.Value);
 
         var stv = new Stv
         {
