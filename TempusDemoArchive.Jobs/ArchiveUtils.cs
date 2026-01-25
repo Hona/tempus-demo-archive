@@ -19,4 +19,10 @@ public static class ArchiveUtils
     {
         return date?.ToString("yyyy-MM-dd") ?? "unknown";
     }
+
+    public static string ToValidFileName(string name)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
+    }
 }

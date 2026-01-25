@@ -68,21 +68,9 @@ public class SearchChatMessagesJob : IJob
             var stringOutput = stringBuilder.ToString();
             Console.WriteLine(stringOutput);
             
-            await File.WriteAllTextAsync(Path.Join(ArchivePath.TempRoot, 
-                ToValidFileName("find_exact_message_"+DateTime.Now.ToString("s")
-                                                     +"_"+foundMessage +".txt")), stringOutput, cancellationToken);
+            await File.WriteAllTextAsync(Path.Join(ArchivePath.TempRoot,
+                ArchiveUtils.ToValidFileName("find_exact_message_" + DateTime.Now.ToString("s")
+                                                + "_" + foundMessage + ".txt")), stringOutput, cancellationToken);
         }
-    }
-    
-    public static string ToValidFileName(string name)
-    {
-        var invalidChars = System.IO.Path.GetInvalidFileNameChars();
-        var validName = new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
-
-        // Optionally, you can replace invalid characters instead of removing them.
-        // For example, replacing with an underscore:
-        // var validName = string.Concat(name.Select(ch => invalidChars.Contains(ch) ? '_' : ch));
-
-        return validName;
     }
 }

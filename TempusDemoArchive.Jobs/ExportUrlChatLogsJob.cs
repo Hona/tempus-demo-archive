@@ -31,7 +31,7 @@ public class ExportUrlChatLogsJob : IJob
             chatLogs.AddRange(chatLog);
         }
         
-        var fileName = $"all_chatlogs_{SearchChatMessagesJob.ToValidFileName(DateTime.Now.ToString("s"))}.txt";
+        var fileName = $"all_chatlogs_{ArchiveUtils.ToValidFileName(DateTime.Now.ToString("s"))}.txt";
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         
         await File.WriteAllLinesAsync(filePath, chatLogs.Select(x => x.Text), cancellationToken);

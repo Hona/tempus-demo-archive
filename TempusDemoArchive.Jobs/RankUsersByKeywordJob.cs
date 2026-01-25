@@ -38,7 +38,7 @@ public class RankUsersByKeywordJob : IJob
         
         Console.WriteLine(text);
         
-        var fileName = $"naughty_words_{SearchChatMessagesJob.ToValidFileName(foundMessage)}.txt";
+        var fileName = $"naughty_words_{ArchiveUtils.ToValidFileName(foundMessage)}.txt";
         
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         
