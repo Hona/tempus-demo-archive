@@ -1,6 +1,7 @@
 using TempusApi;
 using System.Net;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using TempusApi.Enums;
 using TempusApi.Models.Activity;
 using TempusApi.Models.Responses;
@@ -141,12 +142,47 @@ public class CrawlRecordDemosJob : IJob
             return 0;
         }
 
-        var count = newDemos.Count;
-        db.Demos.AddRange(newDemos);
-        await db.SaveChangesAsync(cancellationToken);
-        newDemos.Clear();
-        return count;
+        try
+        {
+            var count = newDemos.Count;
+            db.Demos.AddRange(newDemos);
+            await db.SaveChangesAsync(cancellationToken);
+            newDemos.Clear();
+            return count;
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+
+            var ids = newDemos.Select(demo => demo.Id).ToList();
+            var existing = db.Demos
+                .Where(demo => ids.Contains(demo.Id))
+                .Select(demo => demo.Id)
+                .ToHashSet();
+
+            var filtered = newDemos.Where(demo => !existing.Contains(demo.Id)).ToList();
+            var duplicateCount = newDemos.Count - filtered.Count;
+
+            newDemos.Clear();
+
+            if (duplicateCount > 0)
+            {
+                Console.WriteLine($"Skipped {duplicateCount} duplicate demos");
+            }
+
+            if (filtered.Count == 0)
+            {
+                return 0;
+            }
+
+            db.Demos.AddRange(filtered);
+            await db.SaveChangesAsync(cancellationToken);
+            return filtered.Count;
+        }
     }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+        => exception.InnerException is SqliteException sqlite && sqlite.SqliteErrorCode == 19;
 
     private static async Task<List<long>> GetMapIdsAsync(TempusClient client, CancellationToken cancellationToken)
     {
