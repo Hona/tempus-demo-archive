@@ -8,6 +8,8 @@ public class Demo
     public required string Url { get; set; }
     public double Date { get; set; }
     public bool StvProcessed { get; set; }
+    public bool StvFailed { get; set; }
+    public string? StvFailureReason { get; set; }
     
     public virtual Stv? Stv { get; set; }
 }

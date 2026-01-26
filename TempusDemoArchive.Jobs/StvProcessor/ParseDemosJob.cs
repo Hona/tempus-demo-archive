@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using Humanizer;
 using TempusDemoArchive.Persistence.Models;
@@ -12,6 +13,9 @@ public class ParseDemosJob : IJob
     private const int DefaultBatchSize = 200;
     private const int DefaultLogEvery = 50;
     private const long SteamId64Base = 76561197960265728;
+    private const string TimestampFormat = "yyyy-MM-dd HH:mm:ss'Z'";
+
+    internal readonly record struct ParseOutcome(int ChatCount);
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -19,28 +23,40 @@ public class ParseDemosJob : IJob
         var batchSize = GetBatchSize();
         var logEvery = GetLogEvery();
         var verbose = GetVerbose();
-        Console.WriteLine($"Parse parallelism: {parallelism}");
-        Console.WriteLine($"Parse batch size: {batchSize}");
-        Console.WriteLine($"Parse log every: {logEvery}");
-        Console.WriteLine($"Parse verbose: {verbose}");
+        var includeFailed = GetIncludeFailed();
+        Log($"Parse parallelism: {parallelism}");
+        Log($"Parse batch size: {batchSize}");
+        Log($"Parse log every: {logEvery}");
+        Log($"Parse verbose: {verbose}");
+        Log($"Parse include failed: {includeFailed}");
 
         var httpClient = new HttpClient();
         var semaphore = new SemaphoreSlim(parallelism);
-        var processedCount = 0;
+        var completedCount = 0L;
+        var successCount = 0L;
+        var failedCount = 0L;
+        var corruptCount = 0L;
+        var totalChatMessages = 0L;
+        var runStopwatch = Stopwatch.StartNew();
 
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             await using var db = new ArchiveDbContext();
-            var remaining = await db.Demos.CountAsync(x => !x.StvProcessed, cancellationToken);
+            var pendingQuery = db.Demos.Where(x => !x.StvProcessed);
+            if (!includeFailed)
+            {
+                pendingQuery = pendingQuery.Where(x => !x.StvFailed);
+            }
+
+            var remaining = await pendingQuery.CountAsync(cancellationToken);
             if (remaining == 0)
             {
                 break;
             }
 
-            var demoIds = await db.Demos
-                .Where(x => !x.StvProcessed)
+            var demoIds = await pendingQuery
                 .OrderBy(x => x.Date)
                 .ThenBy(x => x.Id)
                 .Select(x => x.Id)
@@ -52,32 +68,127 @@ public class ParseDemosJob : IJob
                 break;
             }
 
+            var batchCompletedStart = Interlocked.Read(ref completedCount);
+            var batchSuccessStart = Interlocked.Read(ref successCount);
+            var batchFailedStart = Interlocked.Read(ref failedCount);
+            var batchCorruptStart = Interlocked.Read(ref corruptCount);
+            var batchMessagesStart = Interlocked.Read(ref totalChatMessages);
             var tasks = demoIds.Select(async demoId =>
             {
                 await semaphore.WaitAsync(cancellationToken);
                 try
                 {
-                    var current = Interlocked.Increment(ref processedCount);
-                    if (logEvery > 0 && (current == 1 || current % logEvery == 0))
+                    var outcome = await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false,
+                        verbose: verbose);
+                    Interlocked.Increment(ref successCount);
+                    if (outcome.ChatCount > 0)
                     {
-                        Console.WriteLine($"Processed {current} demos (remaining ~{remaining})");
+                        Interlocked.Add(ref totalChatMessages, outcome.ChatCount);
                     }
-
-                    await ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: false, verbose: verbose);
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine("Error processing demo: " + demoId);
-                    Console.WriteLine(e);
+                    if (IsCorruptDemo(e))
+                    {
+                        Interlocked.Increment(ref corruptCount);
+                        Log("Demo corrupt (invalid STV): " + demoId);
+                        await MarkDemoFailedAsync(demoId, "invalid_stv", cancellationToken);
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref failedCount);
+                        Log("Error processing demo: " + demoId);
+                        LogException(e);
+                    }
                 }
                 finally
                 {
+                    var completed = Interlocked.Increment(ref completedCount);
+                    if (logEvery > 0 && (completed == 1 || completed % logEvery == 0))
+                    {
+                        var successes = Interlocked.Read(ref successCount);
+                        var failures = Interlocked.Read(ref failedCount);
+                        var corrupt = Interlocked.Read(ref corruptCount);
+                        var remainingEstimate = Math.Max(remaining - (successes - batchSuccessStart) - (corrupt - batchCorruptStart), 0);
+                        Log($"Processed {completed} demos (ok {successes}, corrupt {corrupt}, failed {failures}, remaining ~{remainingEstimate})");
+                    }
                     semaphore.Release();
                 }
             });
 
             await Task.WhenAll(tasks);
+            var remainingAfterBatch = await pendingQuery.CountAsync(cancellationToken);
+            var completedAfterBatch = Interlocked.Read(ref completedCount);
+            var successAfterBatch = Interlocked.Read(ref successCount);
+            var failedAfterBatch = Interlocked.Read(ref failedCount);
+            var corruptAfterBatch = Interlocked.Read(ref corruptCount);
+            var messagesAfterBatch = Interlocked.Read(ref totalChatMessages);
+            var batchCompleted = completedAfterBatch - batchCompletedStart;
+            var batchSuccess = successAfterBatch - batchSuccessStart;
+            var batchFailed = failedAfterBatch - batchFailedStart;
+            var batchCorrupt = corruptAfterBatch - batchCorruptStart;
+            var batchMessages = messagesAfterBatch - batchMessagesStart;
+            var elapsed = runStopwatch.Elapsed;
+            var summary =
+                $"Batch done: +{batchCompleted} demos (ok {batchSuccess}, corrupt {batchCorrupt}, failed {batchFailed}), +{batchMessages:N0} messages (total {messagesAfterBatch:N0}), remaining {remainingAfterBatch:N0}";
+            if (successAfterBatch > 0)
+            {
+                var avgSeconds = elapsed.TotalSeconds / successAfterBatch;
+                var eta = TimeSpan.FromSeconds(avgSeconds * remainingAfterBatch);
+                summary += $", avg {avgSeconds:0.00}s/demo, ETA {eta.Humanize(2)}";
+            }
+
+            if (corruptAfterBatch > 0 || failedAfterBatch > 0)
+            {
+                summary += $", corrupt total {corruptAfterBatch:N0}, failed total {failedAfterBatch:N0}";
+            }
+
+            Log(summary);
         }
+    }
+
+    private static void Log(string message)
+    {
+        Console.WriteLine($"[{DateTime.UtcNow.ToString(TimestampFormat, CultureInfo.InvariantCulture)}] {message}");
+    }
+
+    private static void LogException(Exception exception)
+    {
+        var prefix = $"[{DateTime.UtcNow.ToString(TimestampFormat, CultureInfo.InvariantCulture)}] ";
+        foreach (var line in exception.ToString().Split(Environment.NewLine))
+        {
+            Console.WriteLine(prefix + line);
+        }
+    }
+
+    private static async Task MarkDemoFailedAsync(ulong demoId, string reason, CancellationToken cancellationToken)
+    {
+        await using var db = new ArchiveDbContext();
+        var demoEntry = await db.Demos.FindAsync(new object[] { demoId }, cancellationToken);
+        if (demoEntry is null || demoEntry.StvProcessed)
+        {
+            return;
+        }
+
+        demoEntry.StvFailed = true;
+        demoEntry.StvFailureReason = reason;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    internal static bool IsCorruptDemo(Exception exception)
+    {
+        if (exception is InvalidOperationException
+            && exception.Message.Contains("STV was invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (exception is AggregateException aggregate)
+        {
+            return aggregate.InnerExceptions.Any(IsCorruptDemo);
+        }
+
+        return exception.InnerException != null && IsCorruptDemo(exception.InnerException);
     }
 
     private static int GetParallelism()
@@ -119,7 +230,14 @@ public class ParseDemosJob : IJob
             StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static async Task ProcessDemoAsync(ulong demoId, HttpClient httpClient,
+    private static bool GetIncludeFailed()
+    {
+        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_INCLUDE_FAILED");
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static async Task<ParseOutcome> ProcessDemoAsync(ulong demoId, HttpClient httpClient,
         CancellationToken cancellationToken, bool forceReparse, bool verbose)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -130,8 +248,8 @@ public class ParseDemosJob : IJob
         
         if (demoEntry is null)
         {
-            Console.WriteLine("Demo not found in database: " + demoId);
-            return;
+            Log("Demo not found in database: " + demoId);
+            return new ParseOutcome(0);
         }
 
         if (forceReparse)
@@ -147,51 +265,41 @@ public class ParseDemosJob : IJob
 
         var filePath = ArchivePath.GetDemoFilePath(demoId);
 
-        var downloadResponse = await httpClient.GetAsync(demoEntry.Url, cancellationToken);
+        var downloadResponse = await httpClient.GetAsync(demoEntry.Url, HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        downloadResponse.EnsureSuccessStatusCode();
 
         var downloadSizeBytes = downloadResponse.Content.Headers.ContentLength;
 
         if (verbose)
         {
-            Console.WriteLine("Downloading demo: " +
-                              downloadSizeBytes.GetValueOrDefault().Bytes());
-        }
-
-        // Skip if 1 MB - probably corrupted
-        if (downloadSizeBytes < 1 * 1024 * 1024)
-        {
-            Console.WriteLine("Skipping demo (<1MB - probably corrupt): " + demoId);
-            return;
+            Log("Downloading demo: " + downloadSizeBytes.GetValueOrDefault().Bytes());
         }
 
         await using var downloadStream = await downloadResponse.Content.ReadAsStreamAsync(cancellationToken);
 
-        using (var zip = new ZipArchive(downloadStream))
+        using (var zip = new ZipArchive(downloadStream, ZipArchiveMode.Read))
         {
             var entry = zip.Entries.First(x => x.FullName.EndsWith(".dem"));
-
-            using (var sr = new StreamReader(entry.Open()))
+            await using var entryStream = entry.Open();
+            await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None,
+                81920, FileOptions.SequentialScan);
+            if (verbose)
             {
-                await using (var sw = File.OpenWrite(filePath))
-                {
-                    if (verbose)
-                    {
-                        Console.WriteLine("Extracting demo: " + entry.Length.Bytes());
-                    }
-                    await sr.BaseStream.CopyToAsync(sw, cancellationToken);
-                }
+                Log("Extracting demo: " + entry.Length.Bytes());
             }
+            await entryStream.CopyToAsync(fileStream, cancellationToken);
         }
 
         if (verbose)
         {
-            Console.WriteLine("Extracting STV data");
+            Log("Extracting STV data");
         }
         var output = StvParser.ExtractStvData(filePath);
 
         if (verbose)
         {
-            Console.WriteLine("Mapping to DB model");
+            Log("Mapping to DB model");
         }
         var entityToUserId = output.Users.Values
             .Where(user => user.EntityId.HasValue && user.UserId.HasValue)
@@ -299,24 +407,29 @@ public class ParseDemosJob : IJob
 
         db.Add(stv);
         demoEntry.StvProcessed = true;
+        demoEntry.StvFailed = false;
+        demoEntry.StvFailureReason = null;
+        var chatCount = stv.Chats.Count;
 
         if (verbose)
         {
-            Console.WriteLine("Deleting demo file");
+            Log("Deleting demo file");
         }
 
         File.Delete(filePath);
 
         if (verbose)
         {
-            Console.WriteLine("Saving changes");
+            Log("Saving changes");
         }
 
         await db.SaveChangesAsync(cancellationToken);
         if (verbose)
         {
-            Console.WriteLine("Done. Took " + stopwatch.Elapsed.Humanize(2) + "\n");
+            Log("Done. Took " + stopwatch.Elapsed.Humanize(2));
         }
+
+        return new ParseOutcome(chatCount);
     }
 
     private static (string? Clean, long? SteamId64, string? Kind, bool? IsBot) NormalizeSteamId(string? steamId)

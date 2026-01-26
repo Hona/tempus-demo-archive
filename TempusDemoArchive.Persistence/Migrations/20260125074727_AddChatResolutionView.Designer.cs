@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TempusDemoArchive.Persistence;
 
@@ -10,9 +11,11 @@ using TempusDemoArchive.Persistence;
 namespace TempusDemoArchive.Persistence.Migrations
 {
     [DbContext(typeof(ArchiveDbContext))]
-    partial class ArchiveDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260125074727_AddChatResolutionView")]
+    partial class AddChatResolutionView
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.2");
@@ -25,12 +28,6 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                     b.Property<double>("Date")
                         .HasColumnType("REAL");
-
-                    b.Property<bool>("StvFailed")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("StvFailureReason")
-                        .HasColumnType("TEXT");
 
                     b.Property<bool>("StvProcessed")
                         .HasColumnType("INTEGER");
@@ -104,10 +101,6 @@ namespace TempusDemoArchive.Persistence.Migrations
                     b.HasKey("DemoId", "Index");
 
                     b.HasIndex("FromUserId");
-
-                    b.HasIndex("Text")
-                        .HasDatabaseName("IX_StvChats_Text_TempusWr")
-                        .HasFilter("Text LIKE 'Tempus | (%'");
 
                     b.HasIndex("Tick");
 
@@ -357,12 +350,6 @@ namespace TempusDemoArchive.Persistence.Migrations
                                 .HasColumnType("INTEGER");
 
                             b1.HasKey("StvDemoId");
-
-                            b1.HasIndex("Map")
-                                .HasDatabaseName("IX_Stvs_Header_Map");
-
-                            b1.HasIndex("Server")
-                                .HasDatabaseName("IX_Stvs_Header_Server");
 
                             b1.ToTable("Stvs");
 

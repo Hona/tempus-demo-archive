@@ -6,7 +6,7 @@ public class ListUnprocessedDemosJob : IJob
     {
         await using var db = new ArchiveDbContext();
         
-        var unprocessedDemos = db.Demos.Where(x => !x.StvProcessed).ToList();
+        var unprocessedDemos = db.Demos.Where(x => !x.StvProcessed && !x.StvFailed).ToList();
         
         foreach (var demo in unprocessedDemos)
         {

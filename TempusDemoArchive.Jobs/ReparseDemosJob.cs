@@ -91,12 +91,20 @@ public class ReparseDemosJob : IJob
                     Console.WriteLine($"Reparsed {totalProcessed}/{totalTarget} (remaining {remaining})");
                 }
 
-                await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken, forceReparse: true, verbose: verbose);
+                _ = await StvProcessor.ParseDemosJob.ProcessDemoAsync(demoId, httpClient, cancellationToken,
+                    forceReparse: true, verbose: verbose);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error reparsing demo: " + demoId);
-                Console.WriteLine(e);
+                if (StvProcessor.ParseDemosJob.IsCorruptDemo(e))
+                {
+                    Console.WriteLine("Demo corrupt (invalid STV): " + demoId);
+                }
+                else
+                {
+                    Console.WriteLine("Error reparsing demo: " + demoId);
+                    Console.WriteLine(e);
+                }
             }
             finally
             {

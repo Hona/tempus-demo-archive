@@ -15,6 +15,7 @@ public class ArchiveDbContext : DbContext
     public DbSet<StvTeamChange> StvTeamChanges { get; set; }
     public DbSet<StvDeath> StvDeaths { get; set; }
     public DbSet<StvPause> StvPauses { get; set; }
+    public DbSet<StvChatResolution> StvChatResolutions { get; set; }
     
     // The following configures EF to create a Sqlite database file in the
     // special "local" folder for your platform.
@@ -59,7 +60,12 @@ public class ArchiveDbContext : DbContext
         modelBuilder.Entity<StvPause>().HasKey(pause => new { pause.DemoId, pause.Index });
         
         // Configure Stv and StvHeader relationship
-        modelBuilder.Entity<Stv>().OwnsOne(stv => stv.Header);
+        modelBuilder.Entity<Stv>()
+            .OwnsOne(stv => stv.Header, header =>
+            {
+                header.HasIndex(x => x.Map).HasDatabaseName("IX_Stvs_Header_Map");
+                header.HasIndex(x => x.Server).HasDatabaseName("IX_Stvs_Header_Server");
+            });
 
         // Configure Stv and StvChat relationship
         modelBuilder.Entity<Stv>()
@@ -113,5 +119,13 @@ public class ArchiveDbContext : DbContext
             .HasIndex(chat => chat.FromUserId);
         modelBuilder.Entity<StvChat>()
             .HasIndex(chat => chat.Tick);
+        modelBuilder.Entity<StvChat>()
+            .HasIndex(chat => chat.Text)
+            .HasDatabaseName("IX_StvChats_Text_TempusWr")
+            .HasFilter("Text LIKE 'Tempus | (%'");
+
+        modelBuilder.Entity<StvChatResolution>()
+            .HasNoKey()
+            .ToView("StvChatResolution");
     }
 }

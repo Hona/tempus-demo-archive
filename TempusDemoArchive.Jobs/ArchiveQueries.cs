@@ -31,6 +31,11 @@ public static class ArchiveQueries
                            || user.SteamIdClean == identifier
                            || (steam64 != null && user.SteamId64 == steam64));
     }
+
+    public static IQueryable<StvChatResolution> ChatResolutions(ArchiveDbContext db)
+    {
+        return db.StvChatResolutions.AsNoTracking();
+    }
 }
 
 public class ChatWithUserRow

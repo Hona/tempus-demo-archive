@@ -9,11 +9,20 @@ Directory.CreateDirectory(ArchivePath.Root);
 
 Console.WriteLine("Archive Database: " + ArchivePath.Db);
 
+var skipMigrations = string.Equals(Environment.GetEnvironmentVariable("TEMPUS_SKIP_MIGRATIONS"), "1",
+    StringComparison.OrdinalIgnoreCase)
+                      || string.Equals(Environment.GetEnvironmentVariable("TEMPUS_SKIP_MIGRATIONS"), "true",
+                          StringComparison.OrdinalIgnoreCase);
+Console.WriteLine("Skip migrations: " + skipMigrations);
+
 // Create database if it doesn't exist & migrate
 await using (var db = new ArchiveDbContext())
 {
     Console.WriteLine("Connection String: " + db.Database.GetConnectionString());
-    await db.Database.MigrateAsync();
+    if (!skipMigrations)
+    {
+        await db.Database.MigrateAsync();
+    }
 }
 
 var jobDefinitions = JobCatalog.All;

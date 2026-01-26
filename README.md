@@ -60,6 +60,26 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 - `TEMPUS_PARSE_BATCH_SIZE=200` (default 200)
 - `TEMPUS_PARSE_LOG_EVERY=50`
 - `TEMPUS_PARSE_VERBOSE=1`
+- `TEMPUS_PARSE_INCLUDE_FAILED=1` (retry demos marked failed)
+
+## Sentiment Controls
+- `TEMPUS_SENTIMENT_BUCKET=month` (month/year; default month)
+
+## WR History Controls
+- `TEMPUS_WR_INCLUDE_INFERRED=1` (include map-run inferred WR times; default 0)
+- `TEMPUS_WR_INCLUDE_ALL=1` (emit all WR announcements, not just improvements)
+- `TEMPUS_WR_INCLUDE_SUBRECORDS=1` (include bonus/course/segment/ranked entries)
+
+## Map Run History Controls
+- `TEMPUS_MAPRUN_INCLUDE_WR=1` (include WR map runs; default PR-only)
+
+## Analysis Jobs
+- `wr-history` – WR-only history for a map/class (CSV in `~/.config/TempusDemoArchive/temp/`).
+- `player-maprun` – PR/WR map-run history for a player + map + class (CSV in temp).
+- `sentiment-user-timeline` – per-user sentiment trend CSV + SVG.
+- `playtime-map` – per-map soldier/demo playtime for a user.
+- `spectator-map` – per-map spectator time for a user (requires team-change data).
+- `spectator-peers` – who spectated you / who you spectated (overlap proxy).
 
 ## Schema Highlights (Raw Event Storage)
 - `StvUsers` includes `EntityId`, `SteamIdClean`, `SteamId64`, `SteamIdKind`, `IsBot`
@@ -69,6 +89,8 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 ## Notes
 - Some chat rows have `ClientEntityId` but no `FromUserId` because entity ids can be reused; mapping is skipped when ambiguous.
 - SQLite stores ids as `INTEGER` with a ulong↔long converter to keep queries translatable.
+- `Demos.StvFailed` + `Demos.StvFailureReason` track corrupt/invalid demos so they can be skipped by default.
+- `TEMPUS_SKIP_MIGRATIONS=1` skips auto-migrations at startup for read-only analysis runs.
 
 ## Dedupe Guarantee
 - Demos are deduped by `Demos.Id` (in-memory HashSet + DB PK).

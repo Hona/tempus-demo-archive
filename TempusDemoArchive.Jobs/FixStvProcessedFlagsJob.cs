@@ -19,6 +19,8 @@ public class FixStvProcessedFlagsJob : IJob
             {
                 Console.WriteLine($"Fixing demo {unprocessedDemo.Id}");
                 unprocessedDemo.StvProcessed = true;
+                unprocessedDemo.StvFailed = false;
+                unprocessedDemo.StvFailureReason = null;
             }
             else
             {

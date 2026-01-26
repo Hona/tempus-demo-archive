@@ -9,9 +9,11 @@ public class PrintArchiveStatsJob : IJob
         var db = new ArchiveDbContext();
         
         var processedCount = db.Demos.Count(x => x.StvProcessed);
-        var unprocessedCount = db.Demos.Count(x => !x.StvProcessed);
+        var failedCount = db.Demos.Count(x => x.StvFailed);
+        var unprocessedCount = db.Demos.Count(x => !x.StvProcessed && !x.StvFailed);
         
         Console.WriteLine($"Processed: {processedCount}");
+        Console.WriteLine($"Failed: {failedCount}");
         Console.WriteLine($"Unprocessed: {unprocessedCount}");
         
         var totalDownloadedBytes = db.Stvs.Sum(x => x.DownloadSize);

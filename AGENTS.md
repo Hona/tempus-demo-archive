@@ -71,6 +71,20 @@
 ## SQLite / EF Core
 - SQLite can’t ORDER BY `ulong` directly; global value converter maps `ulong` ↔ `long` for all entities.
 
+## WR History Job
+- Job id: `wr-history` (WR-only, per map/class). CSV emitted to `~/.config/TempusDemoArchive/temp/`.
+- Deterministic formats handled: map record, first record, bonus/course record (including ~holiday tags), course segment records, compact WR lines, IRC broke/set WR, ranked-with-time (rank=1 only).
+- PRs are ignored; unlabeled map-run splits are ignored.
+- Flags:
+  - `TEMPUS_WR_INCLUDE_INFERRED=1` include map-run inferred WR times (default 0).
+  - `TEMPUS_WR_INCLUDE_ALL=1` include all WR announcements, not just improvements.
+  - `TEMPUS_WR_INCLUDE_SUBRECORDS=1` include bonus/course/segment/ranked entries.
+
+## Analysis Jobs
+- `sentiment-user-timeline` writes CSV + SVG for a user.
+- `playtime-map`, `spectator-map`, `spectator-peers` are analysis-only (no DB writes).
+- `player-maprun` exports PR/WR map-run history for a player + map + class.
+
 ## Parser Upstream
 - Canonical parser upstream: `https://codeberg.org/demostf/parser`.
 - FFI exports (`analyze_demo`, `free_string`) are merged into the fork and used for P/Invoke.
