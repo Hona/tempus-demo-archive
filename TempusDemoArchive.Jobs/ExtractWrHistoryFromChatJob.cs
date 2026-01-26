@@ -79,39 +79,55 @@ public class ExtractWrHistoryFromChatJob : IJob
         await using var db = new ArchiveDbContext();
         var mapPrefix = map + "_";
 
-        var mapsMatching = await db.Stvs
+        var mapDemos = await db.Stvs
             .AsNoTracking()
             .Where(x => x.Header.Map == map || EF.Functions.Like(x.Header.Map, mapPrefix + "%"))
-            .Select(x => x.Header.Map)
+            .Select(x => new { x.DemoId, x.Header.Map })
+            .ToListAsync(cancellationToken);
+        var mapByDemoId = mapDemos.ToDictionary(x => x.DemoId, x => x.Map);
+        var mapDemoIds = mapDemos.Select(x => x.DemoId).ToList();
+
+        var mapsMatching = mapDemos
+            .Select(x => x.Map)
             .Distinct()
             .OrderBy(x => x)
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         foreach (var matchingMap in mapsMatching)
         {
             Console.WriteLine(matchingMap);
         }
 
-        var suspectedWrMessages = await db.StvChats
-            .AsNoTracking()
-            .Where(chat => chat.Stv != null)
-            .Where(chat => chat.Stv!.Header.Map == map
-                           || EF.Functions.Like(chat.Stv.Header.Map, mapPrefix + "%"))
-            .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
-            .Where(chat => EF.Functions.Like(chat.Text, "%map run%")
-                           || EF.Functions.Like(chat.Text, "%beat the map record%")
-                           || EF.Functions.Like(chat.Text, "%set the first map record%")
-                           || EF.Functions.Like(chat.Text, "%is ranked%with time%")
-                           || EF.Functions.Like(chat.Text, "%set Bonus%")
-                           || EF.Functions.Like(chat.Text, "%set Course%")
-                           || EF.Functions.Like(chat.Text, "%set C%")
-                           || EF.Functions.Like(chat.Text, "%broke%Bonus%")
-                           || EF.Functions.Like(chat.Text, "%broke%Course%")
-                           || EF.Functions.Like(chat.Text, "%broke C%")
-                           || EF.Functions.Like(chat.Text, "% WR)%")
-                           || EF.Functions.Like(chat.Text, "% PR)%"))
-            .Select(chat => new ChatCandidate(chat.DemoId, chat.Stv!.Header.Map, chat.Text, chat.FromUserId))
-            .ToListAsync(cancellationToken);
+        var suspectedWrMessages = new List<ChatCandidate>();
+        foreach (var chunk in ChunkIds(mapDemoIds))
+        {
+            var chunkChats = await db.StvChats
+                .AsNoTracking()
+                .Where(chat => chunk.Contains(chat.DemoId))
+                .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
+                .Where(chat => (EF.Functions.Like(chat.Text, "%map run%")
+                                && EF.Functions.Like(chat.Text, "%WR%"))
+                               || EF.Functions.Like(chat.Text, "%beat the map record%")
+                               || EF.Functions.Like(chat.Text, "%set the first map record%")
+                               || EF.Functions.Like(chat.Text, "%is ranked%with time%")
+                               || EF.Functions.Like(chat.Text, "%set Bonus%")
+                               || EF.Functions.Like(chat.Text, "%set Course%")
+                               || EF.Functions.Like(chat.Text, "%set C%")
+                               || EF.Functions.Like(chat.Text, "%broke%Bonus%")
+                               || EF.Functions.Like(chat.Text, "%broke%Course%")
+                               || EF.Functions.Like(chat.Text, "%broke C%")
+                               || EF.Functions.Like(chat.Text, "% WR)%"))
+                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
+                .ToListAsync(cancellationToken);
+
+            foreach (var chat in chunkChats)
+            {
+                if (mapByDemoId.TryGetValue(chat.DemoId, out var mapName))
+                {
+                    suspectedWrMessages.Add(new ChatCandidate(chat.DemoId, mapName, chat.Text, chat.FromUserId));
+                }
+            }
+        }
 
         var suspectedIrcWrMessages = await db.StvChats
             .AsNoTracking()
@@ -287,6 +303,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return null;
+        }
         var split = match.Groups["split"].Success
             ? NormalizeSignedTime(match.Groups["split"].Value)
             : null;
@@ -335,6 +355,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var player = match.Groups["player"].Value.Trim();
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var identity = ResolveUserIdentity(candidate, player, demoUsers);
@@ -357,6 +381,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var mapName = candidate.Map ?? mapInput;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
@@ -384,6 +412,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var split = match.Groups["split"].Success ? NormalizeSignedTime(match.Groups["split"].Value) : null;
         var improvement = match.Groups["improvement"].Success
             ? NormalizeTime(match.Groups["improvement"].Value)
@@ -421,6 +453,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var split = NormalizeSignedTime(match.Groups["split"].Value);
         var improvement = match.Groups["improvement"].Success
             ? NormalizeTime(match.Groups["improvement"].Value)
@@ -459,6 +495,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var mapName = candidate.Map ?? mapInput;
         var source = "Bonus " + match.Groups["index"].Value + " First";
 
@@ -483,6 +523,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var split = NormalizeSignedTime(match.Groups["split"].Value);
         var improvement = match.Groups["improvement"].Success
             ? NormalizeTime(match.Groups["improvement"].Value)
@@ -521,6 +565,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var mapName = candidate.Map ?? mapInput;
         var source = "Course " + match.Groups["index"].Value + " First";
 
@@ -545,6 +593,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var segment = "C" + match.Groups["index"].Value + " - " + match.Groups["name"].Value.Trim();
         var mapName = candidate.Map ?? mapInput;
 
@@ -569,6 +621,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var split = NormalizeSignedTime(match.Groups["split"].Value);
         var improvement = match.Groups["improvement"].Success
             ? NormalizeTime(match.Groups["improvement"].Value)
@@ -623,6 +679,11 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
+        if (!IsValidRecordTime(recordTime))
+        {
+            return false;
+        }
+
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var identity = ResolveUserIdentity(candidate, player, demoUsers);
@@ -651,6 +712,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var detectedClass = NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
+        if (!IsValidRecordTime(time))
+        {
+            return false;
+        }
         var mapName = match.Groups["map"].Value;
         var segment = match.Groups["segment"].Value;
         var index = match.Groups["index"].Value;
@@ -876,6 +941,11 @@ public class ExtractWrHistoryFromChatJob : IJob
         return string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsValidRecordTime(string value)
+    {
+        return TryParseTimeSeconds(value, out var seconds) && seconds > 0.0001;
+    }
+
     private static bool TryParseTimeSeconds(string value, out double seconds)
     {
         seconds = 0;
@@ -1088,11 +1158,16 @@ public class ExtractWrHistoryFromChatJob : IJob
             return new Dictionary<ulong, DateTime?>();
         }
 
-        var demoDates = await db.Demos
-            .AsNoTracking()
-            .Where(x => demoIds.Contains(x.Id))
-            .Select(x => new { x.Id, x.Date })
-            .ToListAsync(cancellationToken);
+        var demoDates = new List<(ulong Id, double Date)>();
+        foreach (var chunk in ChunkIds(demoIds))
+        {
+            var chunkDates = await db.Demos
+                .AsNoTracking()
+                .Where(x => chunk.Contains(x.Id))
+                .Select(x => new { x.Id, x.Date })
+                .ToListAsync(cancellationToken);
+            demoDates.AddRange(chunkDates.Select(x => (x.Id, x.Date)));
+        }
 
         return demoDates.ToDictionary(x => x.Id, x => (DateTime?)ArchiveUtils.GetDateFromTimestamp(x.Date));
     }
@@ -1105,12 +1180,31 @@ public class ExtractWrHistoryFromChatJob : IJob
             return new Dictionary<ulong, DemoUsers>();
         }
 
-        var users = await db.StvUsers
-            .AsNoTracking()
-            .Where(x => demoIds.Contains(x.DemoId))
-            .ToListAsync(cancellationToken);
+        var users = new List<StvUser>();
+        foreach (var chunk in ChunkIds(demoIds))
+        {
+            var chunkUsers = await db.StvUsers
+                .AsNoTracking()
+                .Where(x => chunk.Contains(x.DemoId))
+                .ToListAsync(cancellationToken);
+            users.AddRange(chunkUsers);
+        }
 
         return BuildDemoUsers(users);
+    }
+
+    private static IEnumerable<List<ulong>> ChunkIds(IReadOnlyList<ulong> demoIds, int size = 900)
+    {
+        for (var i = 0; i < demoIds.Count; i += size)
+        {
+            var chunk = demoIds.Skip(i).Take(size).ToList();
+            if (chunk.Count == 0)
+            {
+                yield break;
+            }
+
+            yield return chunk;
+        }
     }
 
     private static Dictionary<ulong, DemoUsers> BuildDemoUsers(IEnumerable<StvUser> users)
