@@ -118,6 +118,10 @@ public class ArchiveDbContext : DbContext
         modelBuilder.Entity<StvChat>()
             .HasIndex(chat => chat.FromUserId);
         modelBuilder.Entity<StvChat>()
+            .HasIndex(chat => new { chat.DemoId, chat.FromUserId })
+            .HasDatabaseName("IX_StvChats_DemoId_FromUserId")
+            .HasFilter("FromUserId IS NOT NULL");
+        modelBuilder.Entity<StvChat>()
             .HasIndex(chat => chat.Tick);
         modelBuilder.Entity<StvChat>()
             .HasIndex(chat => chat.Text)

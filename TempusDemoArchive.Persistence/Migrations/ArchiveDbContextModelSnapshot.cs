@@ -105,6 +105,10 @@ namespace TempusDemoArchive.Persistence.Migrations
 
                     b.HasIndex("FromUserId");
 
+                    b.HasIndex("DemoId", "FromUserId")
+                        .HasDatabaseName("IX_StvChats_DemoId_FromUserId")
+                        .HasFilter("FromUserId IS NOT NULL");
+
                     b.HasIndex("Text")
                         .HasDatabaseName("IX_StvChats_Text_TempusWr")
                         .HasFilter("Text LIKE 'Tempus | (%'");
