@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
-using TempusDemoArchive.Persistence.Models.STVs;
 
 namespace TempusDemoArchive.Jobs;
 
@@ -51,7 +50,8 @@ public class ExportPlayerMapRunHistoryJob : IJob
                            || EF.Functions.Like(chat.Stv.Header.Map, mapPrefix + "%"))
             .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
             .Where(chat => chat.Text.Contains(" map run "))
-            .Select(chat => new ChatCandidate(chat.DemoId, chat.Stv!.Header.Map, chat.Text))
+            .Select(chat => new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, chat.Stv!.Header.Map, chat.Text,
+                chat.FromUserId))
             .ToListAsync(cancellationToken);
 
         if (candidateChats.Count == 0)
@@ -61,15 +61,8 @@ public class ExportPlayerMapRunHistoryJob : IJob
         }
 
         var demoIds = candidateChats.Select(x => x.DemoId).Distinct().ToList();
-        var demoDates = await LoadDemoDatesAsync(db, demoIds, cancellationToken);
-        var demoUsers = await LoadDemoUsersAsync(db, demoIds, cancellationToken);
-
-        var target = ResolveTargetIdentity(playerIdentifier);
-        if (target == null)
-        {
-            Console.WriteLine("Unable to parse target identifier.");
-            return;
-        }
+        var demoDates = await ExtractWrHistoryFromChatJob.LoadDemoDatesAsync(db, demoIds, cancellationToken);
+        var demoUsers = await ExtractWrHistoryFromChatJob.LoadDemoUsersAsync(db, demoIds, cancellationToken);
 
         var results = new List<MapRunEntry>();
         foreach (var candidate in candidateChats)
@@ -94,8 +87,8 @@ public class ExportPlayerMapRunHistoryJob : IJob
             }
 
             var playerName = match.Groups["player"].Value.Trim();
-            var identity = ResolveUserIdentity(candidate, playerName, demoUsers);
-            if (identity == null || !target.Matches(identity))
+            var resolved = ExtractWrHistoryFromChatJob.ResolveUserIdentity(candidate, playerName, demoUsers);
+            if (resolved.Identity == null || !MatchesTarget(playerIdentifier, resolved.Identity))
             {
                 continue;
             }
@@ -104,7 +97,7 @@ public class ExportPlayerMapRunHistoryJob : IJob
             results.Add(new MapRunEntry(
                 date,
                 candidate.DemoId,
-                candidate.Map,
+                candidate.Map ?? map,
                 detectedClass,
                 label.ToUpperInvariant(),
                 TempusTime.NormalizeTime(match.Groups["run"].Value),
@@ -136,14 +129,19 @@ public class ExportPlayerMapRunHistoryJob : IJob
         return EnvVar.GetBool("TEMPUS_MAPRUN_INCLUDE_WR");
     }
 
-    private static TargetIdentity? ResolveTargetIdentity(string identifier)
+    private static bool MatchesTarget(string identifier, UserIdentity identity)
     {
-        if (long.TryParse(identifier, out var steam64))
+        if (identity.SteamId64.HasValue && long.TryParse(identifier, out var steam64))
         {
-            return TargetIdentity.FromSteam64(steam64);
+            return identity.SteamId64.Value == steam64;
         }
 
-        return TargetIdentity.FromSteamId(identifier);
+        if (!string.IsNullOrWhiteSpace(identity.SteamId))
+        {
+            return string.Equals(identity.SteamId, identifier, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static bool IsClassMatch(string detectedClass, string input)
@@ -169,130 +167,6 @@ public class ExportPlayerMapRunHistoryJob : IJob
         }
 
         return value;
-    }
-
-    private static async Task<Dictionary<ulong, DateTime?>> LoadDemoDatesAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        if (demoIds.Count == 0)
-        {
-            return new Dictionary<ulong, DateTime?>();
-        }
-
-        var demoDates = new List<(ulong Id, double Date)>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var chunkDates = await db.Demos
-                .AsNoTracking()
-                .Where(x => chunk.Contains(x.Id))
-                .Select(x => new { x.Id, x.Date })
-                .ToListAsync(cancellationToken);
-            demoDates.AddRange(chunkDates.Select(x => (x.Id, x.Date)));
-        }
-
-        return demoDates.ToDictionary(x => x.Id, x => (DateTime?)ArchiveUtils.GetDateFromTimestamp(x.Date));
-    }
-
-    private static async Task<Dictionary<ulong, DemoUsers>> LoadDemoUsersAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        if (demoIds.Count == 0)
-        {
-            return new Dictionary<ulong, DemoUsers>();
-        }
-
-        var users = new List<StvUser>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var chunkUsers = await db.StvUsers
-                .AsNoTracking()
-                .Where(x => chunk.Contains(x.DemoId))
-                .ToListAsync(cancellationToken);
-            users.AddRange(chunkUsers);
-        }
-
-        return BuildDemoUsers(users);
-    }
-
-    private static Dictionary<ulong, DemoUsers> BuildDemoUsers(IEnumerable<StvUser> users)
-    {
-        var demoUsers = new Dictionary<ulong, DemoUsers>();
-        foreach (var group in users.GroupBy(user => user.DemoId))
-        {
-            var byUserId = new Dictionary<int, UserIdentity>();
-            var byName = new Dictionary<string, UserIdentity?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var user in group)
-            {
-                var identity = new UserIdentity(user.SteamId64, user.SteamIdClean ?? user.SteamId);
-                if (user.UserId.HasValue && !byUserId.ContainsKey(user.UserId.Value))
-                {
-                    byUserId[user.UserId.Value] = identity;
-                }
-
-                var name = user.Name.Trim();
-                if (name.Length == 0)
-                {
-                    continue;
-                }
-
-                if (byName.TryGetValue(name, out var existing))
-                {
-                    if (existing != null)
-                    {
-                        byName[name] = null;
-                    }
-                }
-                else
-                {
-                    byName[name] = identity;
-                }
-            }
-
-            demoUsers[group.Key] = new DemoUsers(byUserId, byName);
-        }
-
-        return demoUsers;
-    }
-
-    private static UserIdentity? ResolveUserIdentity(ChatCandidate candidate, string player,
-        IReadOnlyDictionary<ulong, DemoUsers> demoUsers)
-    {
-        if (!demoUsers.TryGetValue(candidate.DemoId, out var users))
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(player))
-        {
-            return null;
-        }
-
-        var normalized = player.Trim();
-        if (users.ByName.TryGetValue(normalized, out var byName))
-        {
-            return byName;
-        }
-
-        if (normalized.EndsWith("...", StringComparison.Ordinal) && normalized.Length > 3)
-        {
-            var prefix = normalized.Substring(0, normalized.Length - 3).Trim();
-            if (prefix.Length > 0)
-            {
-                var matches = users.ByName
-                    .Where(entry => entry.Value != null
-                                    && entry.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    .Select(entry => entry.Value)
-                    .Distinct()
-                    .ToList();
-
-                if (matches.Count == 1)
-                {
-                    return matches[0];
-                }
-            }
-        }
-
-        return null;
     }
 
     private static string WriteCsv(string identifier, string map, string @class,
@@ -325,38 +199,6 @@ public class ExportPlayerMapRunHistoryJob : IJob
         return filePath;
     }
 
-    private sealed record ChatCandidate(ulong DemoId, string Map, string Text);
-    private sealed record DemoUsers(Dictionary<int, UserIdentity> ByUserId, Dictionary<string, UserIdentity?> ByName);
     private sealed record MapRunEntry(DateTime? Date, ulong DemoId, string Map, string Class, string Label,
         string RunTime, string? Split, string? Improvement);
-
-    private sealed class TargetIdentity
-    {
-        private readonly long? _steam64;
-        private readonly string? _steamId;
-
-        private TargetIdentity(long? steam64, string? steamId)
-        {
-            _steam64 = steam64;
-            _steamId = steamId;
-        }
-
-        public static TargetIdentity FromSteam64(long steam64) => new(steam64, null);
-        public static TargetIdentity FromSteamId(string steamId) => new(null, steamId);
-
-        public bool Matches(UserIdentity identity)
-        {
-            if (_steam64.HasValue && identity.SteamId64.HasValue)
-            {
-                return _steam64.Value == identity.SteamId64.Value;
-            }
-
-            if (!string.IsNullOrWhiteSpace(_steamId) && !string.IsNullOrWhiteSpace(identity.SteamId))
-            {
-                return string.Equals(_steamId, identity.SteamId, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return false;
-        }
-    }
 }

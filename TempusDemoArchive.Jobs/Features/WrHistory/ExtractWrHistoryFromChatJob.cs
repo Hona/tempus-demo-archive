@@ -759,7 +759,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         return true;
     }
 
-    private static ResolvedIdentity ResolveUserIdentity(ChatCandidate candidate, string player,
+    internal static ResolvedIdentity ResolveUserIdentity(ChatCandidate candidate, string player,
         IReadOnlyDictionary<ulong, DemoUsers> demoUsers)
     {
         if (!demoUsers.TryGetValue(candidate.DemoId, out var users))
