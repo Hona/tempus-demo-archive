@@ -77,6 +77,7 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 - `wr-history` – WR-only history for a map/class (CSV in `~/.config/TempusDemoArchive/temp/`).
 - `player-maprun` – PR/WR map-run history for a player + map + class (CSV in temp).
 - `sentiment-user-timeline` – per-user sentiment trend CSV + SVG.
+- `tempus-wrapped` – year-in-review raw dataset (chat + stats) for a user.
 - `playtime-map` – per-map soldier/demo playtime for a user.
 - `spectator-map` – per-map spectator time for a user (requires team-change data).
 - `spectator-peers` – who spectated you / who you spectated (overlap proxy).

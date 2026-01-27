@@ -1,4 +1,5 @@
-﻿using System.Text;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
 
 namespace TempusDemoArchive.Jobs;
 
@@ -8,17 +9,19 @@ public class RankUsersByKeywordJob : IJob
     {
         await using var db = new ArchiveDbContext();
 
-        Console.WriteLine("Input naughty word: ");
-        var foundMessage = Console.ReadLine();
+        Console.WriteLine("Input words separated by commas: ");
+        var input = Console.ReadLine();
 
-        if (string.IsNullOrWhiteSpace(foundMessage))
+        if (string.IsNullOrWhiteSpace(input))
         {
-            Console.WriteLine("No word provided.");
+            Console.WriteLine("No words provided.");
             return;
         }
+
+        var words = input.Split(',').Select(x => x.Trim().ToLowerInvariant()).ToList();
         
         var matching = await ArchiveQueries.ChatsWithUsers(db)
-            .Where(chat => EF.Functions.Like(chat.Text, $"%{foundMessage}%"))
+            .Where(chat => words.Any(word => EF.Functions.Like(chat.Text, $"%{word}%")))
             .ToListAsync(cancellationToken: cancellationToken);
 
         var sb = new StringBuilder();
@@ -38,7 +41,8 @@ public class RankUsersByKeywordJob : IJob
         
         Console.WriteLine(text);
         
-        var fileName = $"naughty_words_{ArchiveUtils.ToValidFileName(foundMessage)}.txt";
+        var wordsKey = string.Join("_", words);
+        var fileName = ArchiveUtils.ToValidFileName($"keyword_rank_{wordsKey}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
         
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         

@@ -82,6 +82,7 @@
 
 ## Analysis Jobs
 - `sentiment-user-timeline` writes CSV + SVG for a user.
+- `tempus-wrapped` exports a year-in-review raw dataset (chat + stats) for a user.
 - `playtime-map`, `spectator-map`, `spectator-peers` are analysis-only (no DB writes).
 - `player-maprun` exports PR/WR map-run history for a player + map + class.
 
