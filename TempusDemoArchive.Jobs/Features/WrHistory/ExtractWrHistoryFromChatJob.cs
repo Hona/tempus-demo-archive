@@ -40,9 +40,6 @@ public class ExtractWrHistoryFromChatJob : IJob
     private static readonly Regex RankedTimeRegex = new(
         $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) is ranked (?<rank>\d+)/(?<total>\d+) on (?<map>[^ ]+)(?:\s+(?<segment>Bonus|Course)\s+(?<index>\d+))? with time: (?<time>{TimePattern})\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex MapRunRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex IrcWrRegex = new(
         $@"^:: \((?<class>[^)]+)\) (?<player>.+?) broke (?<map>[^ ]+) WR: (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -307,7 +304,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return null;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -352,7 +349,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var label = match.Groups["label"].Value;
         if (!IsWorldRecordLabel(label, allowEmpty: false))
         {
@@ -392,7 +389,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -424,7 +421,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             }
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -466,7 +463,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -509,7 +506,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -537,7 +534,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -580,7 +577,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -608,7 +605,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -637,7 +634,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -674,13 +671,13 @@ public class ExtractWrHistoryFromChatJob : IJob
         out WrHistoryEntry? entry)
     {
         entry = null;
-        var match = MapRunRegex.Match(candidate.Text);
+        var match = WrChatRegexes.MapRun.Match(candidate.Text);
         if (!match.Success)
         {
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var runTime = NormalizeTime(match.Groups["run"].Value);
         var splitRaw = match.Groups["split"].Value;
@@ -730,7 +727,7 @@ public class ExtractWrHistoryFromChatJob : IJob
             return false;
         }
 
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
+        var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
         var player = match.Groups["player"].Value.Trim();
         var time = NormalizeTime(match.Groups["time"].Value);
         if (!IsValidRecordTime(time))
@@ -938,21 +935,6 @@ public class ExtractWrHistoryFromChatJob : IJob
     private static bool GetIncludeLookup()
     {
         return EnvVar.GetBool("TEMPUS_WR_INCLUDE_LOOKUP");
-    }
-
-    private static string NormalizeClass(string value)
-    {
-        if (string.Equals(value, "Soldier", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Solly";
-        }
-
-        if (string.Equals(value, "Demoman", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Demo";
-        }
-
-        return value;
     }
 
     private static string NormalizeTime(string value)

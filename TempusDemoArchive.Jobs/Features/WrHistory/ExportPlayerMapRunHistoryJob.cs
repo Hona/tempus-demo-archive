@@ -6,10 +6,6 @@ namespace TempusDemoArchive.Jobs;
 
 public class ExportPlayerMapRunHistoryJob : IJob
 {
-    private static readonly Regex MapRunRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         Console.WriteLine("Enter steam ID or Steam64:");
@@ -67,13 +63,13 @@ public class ExportPlayerMapRunHistoryJob : IJob
         var results = new List<MapRunEntry>();
         foreach (var candidate in candidateChats)
         {
-            var match = MapRunRegex.Match(candidate.Text);
+            var match = WrChatRegexes.MapRun.Match(candidate.Text);
             if (!match.Success)
             {
                 continue;
             }
 
-            var detectedClass = NormalizeClass(match.Groups["class"].Value);
+            var detectedClass = WrChatNormalizer.NormalizeClass(match.Groups["class"].Value);
             if (!IsClassMatch(detectedClass, @class))
             {
                 continue;
@@ -152,21 +148,6 @@ public class ExportPlayerMapRunHistoryJob : IJob
         }
 
         return string.Equals(detectedClass, "Demo", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeClass(string value)
-    {
-        if (string.Equals(value, "Soldier", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Solly";
-        }
-
-        if (string.Equals(value, "Demoman", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Demo";
-        }
-
-        return value;
     }
 
     private static string WriteCsv(string identifier, string map, string @class,
