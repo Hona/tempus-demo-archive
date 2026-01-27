@@ -9,10 +9,7 @@ Directory.CreateDirectory(ArchivePath.Root);
 
 Console.WriteLine("Archive Database: " + ArchivePath.Db);
 
-var skipMigrations = string.Equals(Environment.GetEnvironmentVariable("TEMPUS_SKIP_MIGRATIONS"), "1",
-    StringComparison.OrdinalIgnoreCase)
-                      || string.Equals(Environment.GetEnvironmentVariable("TEMPUS_SKIP_MIGRATIONS"), "true",
-                          StringComparison.OrdinalIgnoreCase);
+var skipMigrations = EnvVar.GetBool("TEMPUS_SKIP_MIGRATIONS");
 Console.WriteLine("Skip migrations: " + skipMigrations);
 
 // Create database if it doesn't exist & migrate

@@ -8,12 +8,14 @@ public class ExportWrHistoryAllMapsJob : IJob
     {
         var includeSubRecords = GetIncludeSubRecords();
         var includeInferred = GetIncludeInferred();
+        var includeLookup = GetIncludeLookup();
         var includeAll = GetIncludeAllEntries();
         var outputRoot = Path.Combine(ArchivePath.TempRoot, "wr-history-all");
         Directory.CreateDirectory(outputRoot);
 
         Console.WriteLine($"Include subrecords: {includeSubRecords}");
         Console.WriteLine($"Include inferred: {includeInferred}");
+        Console.WriteLine($"Include lookup: {includeLookup}");
         Console.WriteLine($"Include all entries: {includeAll}");
         Console.WriteLine($"Output dir: {outputRoot}");
 
@@ -111,6 +113,13 @@ public class ExportWrHistoryAllMapsJob : IJob
                 .ToList();
         }
 
+        if (!includeLookup)
+        {
+            filtered = filtered
+                .Where(entry => !entry.IsLookup)
+                .ToList();
+        }
+
         var grouped = filtered
             .GroupBy(entry => new { entry.Map, entry.Class })
             .OrderBy(group => group.Key.Map)
@@ -176,27 +185,21 @@ public class ExportWrHistoryAllMapsJob : IJob
 
     private static bool GetIncludeSubRecords()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_SUBRECORDS");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_SUBRECORDS");
     }
 
     private static bool GetIncludeAllEntries()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_ALL");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_ALL");
     }
 
     private static bool GetIncludeInferred()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_INFERRED");
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_INFERRED");
+    }
 
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    private static bool GetIncludeLookup()
+    {
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_LOOKUP");
     }
 }

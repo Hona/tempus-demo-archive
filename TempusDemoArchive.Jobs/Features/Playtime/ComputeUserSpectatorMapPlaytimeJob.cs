@@ -59,7 +59,7 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
             .Join(userQuery,
                 change => new { change.DemoId, UserId = (int?)change.UserId },
                 user => new { user.DemoId, UserId = user.UserId },
-                (change, _) => new TeamChangeEvent(change.DemoId, change.UserId, change.Tick, change.Team,
+                (change, _) => new PlaytimeTeamChangeEvent(change.DemoId, change.UserId, change.Tick, change.Team,
                     change.Disconnect))
             .ToListAsync(cancellationToken);
 
@@ -97,9 +97,9 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
                 continue;
             }
 
-            IReadOnlyList<TeamChangeEvent> demoTeams = teamsByDemo.TryGetValue(demoId, out var teamList)
+            IReadOnlyList<PlaytimeTeamChangeEvent> demoTeams = teamsByDemo.TryGetValue(demoId, out var teamList)
                 ? teamList
-                : Array.Empty<TeamChangeEvent>();
+                : Array.Empty<PlaytimeTeamChangeEvent>();
             IReadOnlyList<SpawnEvent> demoSpawns = spawnsByDemo.TryGetValue(demoId, out var spawnList)
                 ? spawnList
                 : Array.Empty<SpawnEvent>();
@@ -165,16 +165,17 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
         }
     }
 
-    private static async Task<Dictionary<ulong, DemoMeta>> LoadMetaAsync(ArchiveDbContext db,
+    private static async Task<Dictionary<ulong, PlaytimeDemoMeta>> LoadMetaAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
     {
-        var result = new Dictionary<ulong, DemoMeta>();
-        foreach (var chunk in ChunkIds(demoIds))
+        var result = new Dictionary<ulong, PlaytimeDemoMeta>();
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var metas = await db.Stvs
                 .AsNoTracking()
                 .Where(stv => chunk.Contains(stv.DemoId))
-                .Select(stv => new DemoMeta(stv.DemoId, stv.Header.Map, stv.IntervalPerTick, stv.Header.Ticks))
+                .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, string.Empty, stv.IntervalPerTick,
+                    stv.Header.Ticks))
                 .ToListAsync(cancellationToken);
             foreach (var meta in metas)
             {
@@ -185,21 +186,7 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
         return result;
     }
 
-    private static IEnumerable<List<ulong>> ChunkIds(IReadOnlyList<ulong> demoIds, int size = 900)
-    {
-        for (var i = 0; i < demoIds.Count; i += size)
-        {
-            var chunk = demoIds.Skip(i).Take(size).ToList();
-            if (chunk.Count == 0)
-            {
-                yield break;
-            }
-
-            yield return chunk;
-        }
-    }
-
-    private static int GetDemoEndTick(DemoMeta meta, IReadOnlyList<TeamChangeEvent> teamChanges,
+    private static int GetDemoEndTick(PlaytimeDemoMeta meta, IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges,
         IReadOnlyList<SpawnEvent> spawns)
     {
         var demoEndTick = meta.HeaderTicks ?? 0;
@@ -222,7 +209,7 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
         return max;
     }
 
-    private static List<Interval> BuildSpectatorIntervals(int userId, IReadOnlyList<TeamChangeEvent> teamChanges,
+    private static List<Interval> BuildSpectatorIntervals(int userId, IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges,
         IReadOnlyList<SpawnEvent> spawns, int demoEndTick)
     {
         var events = new List<SpectatorEvent>();
@@ -322,12 +309,10 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
 
     private static string FormatHours(double seconds)
     {
-        return (seconds / 3600d).ToString("0.##", CultureInfo.InvariantCulture) + "h";
+        return HumanTime.FormatHours(seconds);
     }
 
     private sealed record UserEntry(ulong DemoId, int UserId, string Name);
-    private sealed record DemoMeta(ulong DemoId, string Map, double? IntervalPerTick, int? HeaderTicks);
-    private sealed record TeamChangeEvent(ulong DemoId, int UserId, int Tick, string Team, bool Disconnect);
     private sealed record SpawnEvent(ulong DemoId, int UserId, int Tick);
     private sealed record Interval(int StartTick, int EndTick);
     private sealed record SpectatorEvent(int Tick, SpectatorEventKind Kind);

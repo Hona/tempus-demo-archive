@@ -7,8 +7,8 @@ namespace TempusDemoArchive.Jobs;
 
 public class ExtractWrHistoryFromChatJob : IJob
 {
-    private const string TimePattern = @"\d{1,2}:\d{2}(?::\d{2})?\.\d{2}";
-    private const string SignedTimePattern = @"[+-]?" + TimePattern;
+    private const string TimePattern = TempusTime.TimePattern;
+    private const string SignedTimePattern = TempusTime.SignedTimePattern;
 
     private static readonly Regex MapRecordRegex = new(
         $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) beat the map record: (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
@@ -100,7 +100,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         var suspectedWrMessages = new List<ChatCandidate>();
-        foreach (var chunk in ChunkIds(mapDemoIds))
+        foreach (var chunk in DbChunk.Chunk(mapDemoIds))
         {
             var chunkChats = await db.StvChats
                 .AsNoTracking()
@@ -190,6 +190,12 @@ public class ExtractWrHistoryFromChatJob : IJob
         if (!includeInferred)
         {
             classOutput = classOutput.Where(entry => !entry.Inferred);
+        }
+
+        var includeLookup = GetIncludeLookup();
+        if (!includeLookup)
+        {
+            classOutput = classOutput.Where(entry => !entry.IsLookup);
         }
 
         var includeAll = GetIncludeAllEntries();
@@ -370,7 +376,8 @@ public class ExtractWrHistoryFromChatJob : IJob
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label, source, time, null, null, null, false, date,
-            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates,
+            IsLookup: true);
         return true;
     }
 
@@ -747,7 +754,8 @@ public class ExtractWrHistoryFromChatJob : IJob
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, true, date,
-            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates,
+            IsLookup: true);
         return true;
     }
 
@@ -914,28 +922,22 @@ public class ExtractWrHistoryFromChatJob : IJob
 
     private static bool GetIncludeSubRecords()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_SUBRECORDS");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_SUBRECORDS");
     }
 
     private static bool GetIncludeAllEntries()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_ALL");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_ALL");
     }
 
     private static bool GetIncludeInferred()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WR_INCLUDE_INFERRED");
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_INFERRED");
+    }
 
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    private static bool GetIncludeLookup()
+    {
+        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_LOOKUP");
     }
 
     private static string NormalizeClass(string value)
@@ -955,27 +957,12 @@ public class ExtractWrHistoryFromChatJob : IJob
 
     private static string NormalizeTime(string value)
     {
-        return TryParseTimeSeconds(value, out var seconds) ? FormatTime(seconds) : value;
+        return TempusTime.NormalizeTime(value);
     }
 
     private static string NormalizeSignedTime(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
-        var sign = string.Empty;
-        var raw = value;
-        if (value.StartsWith("+", StringComparison.Ordinal) || value.StartsWith("-", StringComparison.Ordinal))
-        {
-            sign = value.Substring(0, 1);
-            raw = value.Substring(1);
-        }
-
-        return TryParseTimeSeconds(raw, out var seconds)
-            ? sign + FormatTime(seconds)
-            : value;
+        return TempusTime.NormalizeSignedTime(value);
     }
 
     private static string SplitMapSource(string rawMap, out string source)
@@ -1052,148 +1039,18 @@ public class ExtractWrHistoryFromChatJob : IJob
 
     private static bool IsValidRecordTime(string value)
     {
-        return TryParseTimeSeconds(value, out var seconds) && seconds > 0.0001;
-    }
-
-    private static bool TryParseTimeSeconds(string value, out double seconds)
-    {
-        seconds = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var parts = value.Split(':');
-        if (parts.Length is < 2 or > 3)
-        {
-            return false;
-        }
-
-        if (!double.TryParse(parts[^1], NumberStyles.Float, CultureInfo.InvariantCulture, out var secPart))
-        {
-            return false;
-        }
-
-        if (!int.TryParse(parts[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes))
-        {
-            return false;
-        }
-
-        var hours = 0;
-        if (parts.Length == 3
-            && !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours))
-        {
-            return false;
-        }
-
-        seconds = hours * 3600 + minutes * 60 + secPart;
-        return true;
+        return TempusTime.TryParseTimeCentiseconds(value, out var centiseconds) && centiseconds > 0;
     }
 
     private static bool TryParseTimeCentiseconds(string value, out long centiseconds)
     {
         centiseconds = 0;
-        if (string.IsNullOrWhiteSpace(value))
+        if (!TempusTime.TryParseTimeCentiseconds(value, out var parsed))
         {
             return false;
         }
 
-        var parts = value.Split(':');
-        if (parts.Length is < 2 or > 3)
-        {
-            return false;
-        }
-
-        if (!TryParseSecondsCentiseconds(parts[^1], out var secondsPart, out var fractionPart))
-        {
-            return false;
-        }
-
-        if (!int.TryParse(parts[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes))
-        {
-            return false;
-        }
-
-        var hours = 0;
-        if (parts.Length == 3
-            && !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours))
-        {
-            return false;
-        }
-
-        centiseconds = ((long)hours * 3600 + minutes * 60 + secondsPart) * 100 + fractionPart;
-        return true;
-    }
-
-    private static bool TryParseSecondsCentiseconds(string value, out int seconds, out int fraction)
-    {
-        seconds = 0;
-        fraction = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var parts = value.Split('.');
-        if (parts.Length != 2)
-        {
-            return false;
-        }
-
-        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out seconds))
-        {
-            return false;
-        }
-
-        var fractionRaw = parts[1];
-        if (fractionRaw.Length == 1)
-        {
-            fractionRaw += "0";
-        }
-        else if (fractionRaw.Length > 2)
-        {
-            fractionRaw = fractionRaw.Substring(0, 2);
-        }
-
-        if (!int.TryParse(fractionRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out fraction))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool TryParseSignedTimeSeconds(string value, out double seconds, out int sign)
-    {
-        seconds = 0;
-        sign = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var raw = value;
-        if (value.StartsWith("+", StringComparison.Ordinal))
-        {
-            sign = 1;
-            raw = value.Substring(1);
-        }
-        else if (value.StartsWith("-", StringComparison.Ordinal))
-        {
-            sign = -1;
-            raw = value.Substring(1);
-        }
-
-        if (!TryParseTimeSeconds(raw, out seconds))
-        {
-            return false;
-        }
-
-        if (sign == 0)
-        {
-            sign = 0;
-        }
-
+        centiseconds = parsed;
         return true;
     }
 
@@ -1201,66 +1058,24 @@ public class ExtractWrHistoryFromChatJob : IJob
     {
         centiseconds = 0;
         sign = 0;
-        if (string.IsNullOrWhiteSpace(value))
+        if (!TempusTime.TryParseSignedTimeCentiseconds(value, out var parsed, out sign))
         {
             return false;
         }
 
-        var raw = value;
-        if (value.StartsWith("+", StringComparison.Ordinal))
-        {
-            sign = 1;
-            raw = value.Substring(1);
-        }
-        else if (value.StartsWith("-", StringComparison.Ordinal))
-        {
-            sign = -1;
-            raw = value.Substring(1);
-        }
-
-        if (!TryParseTimeCentiseconds(raw, out centiseconds))
-        {
-            return false;
-        }
-
+        centiseconds = parsed;
         return true;
-    }
-
-    private static string FormatTime(double seconds)
-    {
-        var rounded = Math.Round(seconds, 2, MidpointRounding.AwayFromZero);
-        if (rounded < 0)
-        {
-            rounded = 0;
-        }
-
-        var hours = (int)(rounded / 3600);
-        var minutes = (int)((rounded % 3600) / 60);
-        var secs = rounded % 60;
-        var secondsText = secs.ToString("00.00", CultureInfo.InvariantCulture);
-        if (hours > 0)
-        {
-            return $"{hours}:{minutes:D2}:{secondsText}";
-        }
-
-        return $"{minutes:D2}:{secondsText}";
     }
 
     private static string FormatTimeFromCentiseconds(long centiseconds)
     {
-        var rounded = centiseconds < 0 ? 0 : centiseconds;
-        var hours = (int)(rounded / 360000);
-        var minutes = (int)((rounded % 360000) / 6000);
-        var remainingCentiseconds = (int)(rounded % 6000);
-        var seconds = remainingCentiseconds / 100;
-        var fraction = remainingCentiseconds % 100;
-        var secondsText = $"{seconds:00}.{fraction:00}";
-        if (hours > 0)
+        if (centiseconds <= 0)
         {
-            return $"{hours}:{minutes:D2}:{secondsText}";
+            return TempusTime.FormatTimeFromCentiseconds(0);
         }
 
-        return $"{minutes:D2}:{secondsText}";
+        var safe = centiseconds > int.MaxValue ? int.MaxValue : (int)centiseconds;
+        return TempusTime.FormatTimeFromCentiseconds(safe);
     }
 
     internal static IEnumerable<WrHistoryEntry> BuildWrHistory(IEnumerable<WrHistoryEntry> entries, bool includeAll)
@@ -1412,7 +1227,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         var demoDates = new List<(ulong Id, double Date)>();
-        foreach (var chunk in ChunkIds(demoIds))
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var chunkDates = await db.Demos
                 .AsNoTracking()
@@ -1434,7 +1249,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         var users = new List<StvUser>();
-        foreach (var chunk in ChunkIds(demoIds))
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var chunkUsers = await db.StvUsers
                 .AsNoTracking()
@@ -1444,20 +1259,6 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         return BuildDemoUsers(users);
-    }
-
-    private static IEnumerable<List<ulong>> ChunkIds(IReadOnlyList<ulong> demoIds, int size = 900)
-    {
-        for (var i = 0; i < demoIds.Count; i += size)
-        {
-            var chunk = demoIds.Skip(i).Take(size).ToList();
-            if (chunk.Count == 0)
-            {
-                yield break;
-            }
-
-            yield return chunk;
-        }
     }
 
     internal static Dictionary<ulong, DemoUsers> BuildDemoUsers(IEnumerable<StvUser> users)
@@ -1502,7 +1303,8 @@ public class ExtractWrHistoryFromChatJob : IJob
 
 public record WrHistoryEntry(string Player, string Class, string Map, string RecordType, string Source,
     string RecordTime, string? RunTime, string? Split, string? Improvement, bool Inferred, DateTime? Date = null,
-    ulong? DemoId = null, long? SteamId64 = null, string? SteamId = null, string? SteamCandidates = null);
+    ulong? DemoId = null, long? SteamId64 = null, string? SteamId = null, string? SteamCandidates = null,
+    bool IsLookup = false);
 
 public record UserIdentity(long? SteamId64, string? SteamId);
 

@@ -11,12 +11,6 @@ public class ExportTempusWrappedJob : IJob
     private static readonly Regex TokenRegex = new("[a-z0-9']+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    private static readonly HashSet<string> PlayableClasses = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "soldier",
-        "demoman"
-    };
-
     private static readonly Regex DefaultMaskedWordRegex = new(
         @"(?i)(?<![\p{L}\p{N}_])(fuck[a-z]*|cunt[a-z]*|shit[a-z]*|bitch[a-z]*|retard[a-z]*)(?![\p{L}\p{N}_])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -49,11 +43,11 @@ public class ExportTempusWrappedJob : IJob
         }
 
         var year = GetYear();
-        var includeLogsInRaw = GetBoolEnv("TEMPUS_WRAPPED_INCLUDE_LOGS", defaultValue: false);
+        var includeLogsInRaw = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOGS");
         var maskMode = GetMaskMode();
-        var topWords = GetIntEnv("TEMPUS_WRAPPED_TOP_WORDS", defaultValue: 20, min: 0, max: 200);
-        var topPhrases = GetIntEnv("TEMPUS_WRAPPED_TOP_PHRASES", defaultValue: 15, min: 0, max: 200);
-        var topLists = GetIntEnv("TEMPUS_WRAPPED_TOP_LISTS", defaultValue: 10, min: 0, max: 200);
+        var topWords = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_WORDS", 20, min: 0, max: 200);
+        var topPhrases = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_PHRASES", 15, min: 0, max: 200);
+        var topLists = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_LISTS", 10, min: 0, max: 200);
 
         var start = new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var end = new DateTimeOffset(year + 1, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
@@ -341,8 +335,8 @@ public class ExportTempusWrappedJob : IJob
 
         funniest ??= topPositive.FirstOrDefault();
 
-        var includeInferredWr = GetBoolEnv("TEMPUS_WRAPPED_INCLUDE_INFERRED_WR", defaultValue: false);
-        var includeLookupWr = GetBoolEnv("TEMPUS_WRAPPED_INCLUDE_LOOKUP_WR", defaultValue: false);
+        var includeInferredWr = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_INFERRED_WR");
+        var includeLookupWr = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOOKUP_WR");
 
         var resolvedSteamId = targetUsers
             .Select(entry => entry.SteamId)
@@ -352,15 +346,21 @@ public class ExportTempusWrappedJob : IJob
             resolvedSteamId, cancellationToken);
 
         var targetNamesByDemoId = BuildNamesByDemo(targetUsers);
-        var wrEventsRaw = await ComputeWrEventsAsync(db, demoIds, demoMetaById, demoDateById, targetNamesByDemoId,
+
+        var wrEntriesRaw = await ComputeWrEntriesAsync(db, demoIds, demoMetaById, demoDateById, targetNamesByDemoId,
             cancellationToken);
 
-        var inferredWrCount = DedupWrImprovements(wrEventsRaw.Where(wr => wr.Inferred)).Count;
-        var lookupWrCount = DedupWrImprovements(wrEventsRaw.Where(IsLookupWr)).Count;
+        var wrImprovementsRaw = wrEntriesRaw
+            .GroupBy(entry => new { entry.Map, entry.Class })
+            .SelectMany(group => ExtractWrHistoryFromChatJob.BuildWrHistory(group, includeAll: false))
+            .ToList();
+        var inferredWrCount = wrImprovementsRaw.Count(wr => wr.Inferred);
+        var lookupWrCount = wrImprovementsRaw.Count(wr => wr.IsLookup);
 
-        var wrEvents = DedupWrImprovements(wrEventsRaw.Where(wr =>
-            (includeInferredWr || !wr.Inferred)
-            && (includeLookupWr || !IsLookupWr(wr))));
+        var wrEvents = wrImprovementsRaw
+            .Where(wr => (includeInferredWr || !wr.Inferred)
+                         && (includeLookupWr || !wr.IsLookup))
+            .ToList();
 
         KeyValuePair<string, double>? peakPlaytimeDow = playtime.ByDowSeconds.Count == 0
             ? null
@@ -618,7 +618,7 @@ public class ExportTempusWrappedJob : IJob
             foreach (var wr in wrEvents)
             {
                 await rawWriter.WriteLineAsync(
-                    $"{wr.TimestampUtc:yyyy-MM-dd} | {wr.Class} | {wr.Map} | {wr.Source} | {wr.RecordTime} | demo {wr.DemoId} | inferred {wr.Inferred}");
+                    $"{ArchiveUtils.FormatDate(wr.Date)} | {wr.Class} | {wr.Map} | {wr.Source} | {wr.RecordTime} | demo {wr.DemoId} | inferred {wr.Inferred} | lookup {wr.IsLookup}");
             }
 
             await rawWriter.WriteLineAsync();
@@ -692,50 +692,9 @@ public class ExportTempusWrappedJob : IJob
             : defaultYear;
     }
 
-    private static bool GetBoolEnv(string name, bool defaultValue)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return defaultValue;
-        }
-
-        if (string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "no", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return defaultValue;
-    }
-
-    private static int GetIntEnv(string name, int defaultValue, int min, int max)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return defaultValue;
-        }
-
-        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-        {
-            return defaultValue;
-        }
-
-        return Math.Clamp(parsed, min, max);
-    }
-
     private static MaskMode GetMaskMode()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_WRAPPED_MASK_MODE");
+        var value = EnvVar.GetString("TEMPUS_WRAPPED_MASK_MODE");
         if (string.IsNullOrWhiteSpace(value))
         {
             return MaskMode.FirstLetter;
@@ -979,16 +938,16 @@ public class ExportTempusWrappedJob : IJob
         return demoUserIds;
     }
 
-    private static async Task<Dictionary<ulong, DemoMeta>> LoadDemoMetaAsync(ArchiveDbContext db,
+    private static async Task<Dictionary<ulong, PlaytimeDemoMeta>> LoadDemoMetaAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
     {
-        var metas = new Dictionary<ulong, DemoMeta>();
-        foreach (var chunk in ChunkIds(demoIds))
+        var metas = new Dictionary<ulong, PlaytimeDemoMeta>();
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var rows = await db.Stvs
                 .AsNoTracking()
                 .Where(stv => chunk.Contains(stv.DemoId))
-                .Select(stv => new DemoMeta(stv.DemoId, stv.Header.Map, stv.Header.Server, stv.IntervalPerTick,
+                .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, stv.Header.Server, stv.IntervalPerTick,
                     stv.Header.Ticks))
                 .ToListAsync(cancellationToken);
             foreach (var row in rows)
@@ -1003,7 +962,7 @@ public class ExportTempusWrappedJob : IJob
     private static async Task<PlaytimeResult> ComputePlaytimeAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds,
         IReadOnlyDictionary<ulong, HashSet<int>> demoUserIds,
-        IReadOnlyDictionary<ulong, DemoMeta> demoMetaById,
+        IReadOnlyDictionary<ulong, PlaytimeDemoMeta> demoMetaById,
         IReadOnlyDictionary<ulong, double> demoDateById,
         IQueryable<TargetUserEntry> yearUsersQuery,
         CancellationToken cancellationToken)
@@ -1013,7 +972,7 @@ public class ExportTempusWrappedJob : IJob
             .Join(yearUsersQuery,
                 spawn => new { spawn.DemoId, UserId = spawn.UserId },
                 user => new { user.DemoId, UserId = user.UserId },
-                (spawn, _) => new SpawnEvent(spawn.DemoId, spawn.UserId, spawn.Tick, spawn.Class, spawn.Team))
+                (spawn, _) => new PlaytimeSpawnEvent(spawn.DemoId, spawn.UserId, spawn.Tick, spawn.Class, spawn.Team))
             .ToListAsync(cancellationToken);
 
         var deaths = await db.StvDeaths
@@ -1021,7 +980,7 @@ public class ExportTempusWrappedJob : IJob
             .Join(yearUsersQuery,
                 death => new { death.DemoId, UserId = death.VictimUserId },
                 user => new { user.DemoId, UserId = user.UserId },
-                (death, _) => new DeathEvent(death.DemoId, death.VictimUserId, death.Tick))
+                (death, _) => new PlaytimeDeathEvent(death.DemoId, death.VictimUserId, death.Tick))
             .ToListAsync(cancellationToken);
 
         var teamChanges = await db.StvTeamChanges
@@ -1029,19 +988,19 @@ public class ExportTempusWrappedJob : IJob
             .Join(yearUsersQuery,
                 change => new { change.DemoId, UserId = change.UserId },
                 user => new { user.DemoId, UserId = user.UserId },
-                (change, _) => new TeamChangeEvent(change.DemoId, change.UserId, change.Tick, change.Team,
+                (change, _) => new PlaytimeTeamChangeEvent(change.DemoId, change.UserId, change.Tick, change.Team,
                     change.Disconnect))
             .ToListAsync(cancellationToken);
 
         var spawnsByDemo = spawns
             .GroupBy(spawn => spawn.DemoId)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<SpawnEvent>)group.ToList());
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<PlaytimeSpawnEvent>)group.ToList());
         var deathsByDemo = deaths
             .GroupBy(death => death.DemoId)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<DeathEvent>)group.ToList());
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<PlaytimeDeathEvent>)group.ToList());
         var teamsByDemo = teamChanges
             .GroupBy(change => change.DemoId)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<TeamChangeEvent>)group.ToList());
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<PlaytimeTeamChangeEvent>)group.ToList());
 
         var result = new PlaytimeResult();
 
@@ -1059,17 +1018,19 @@ public class ExportTempusWrappedJob : IJob
                 continue;
             }
 
-            IReadOnlyList<SpawnEvent> demoSpawns = spawnsByDemo.TryGetValue(demoId, out var spawnList)
+            IReadOnlyList<PlaytimeSpawnEvent> demoSpawns = spawnsByDemo.TryGetValue(demoId, out var spawnList)
                 ? spawnList
-                : Array.Empty<SpawnEvent>();
-            IReadOnlyList<DeathEvent> demoDeaths = deathsByDemo.TryGetValue(demoId, out var deathList)
+                : Array.Empty<PlaytimeSpawnEvent>();
+            IReadOnlyList<PlaytimeDeathEvent> demoDeaths = deathsByDemo.TryGetValue(demoId, out var deathList)
                 ? deathList
-                : Array.Empty<DeathEvent>();
-            IReadOnlyList<TeamChangeEvent> demoTeams = teamsByDemo.TryGetValue(demoId, out var teamList)
+                : Array.Empty<PlaytimeDeathEvent>();
+            IReadOnlyList<PlaytimeTeamChangeEvent> demoTeams = teamsByDemo.TryGetValue(demoId, out var teamList)
                 ? teamList
-                : Array.Empty<TeamChangeEvent>();
+                : Array.Empty<PlaytimeTeamChangeEvent>();
 
-            if (!TryComputeDemoPlaytime(meta, userIds, demoSpawns, demoDeaths, demoTeams, out var totals))
+            if (!PlaytimeCalculator.TryComputeDemoTotals(meta, userIds, demoSpawns, demoDeaths, demoTeams,
+                    out var totals)
+                || totals.TotalSeconds <= 0)
             {
                 continue;
             }
@@ -1107,214 +1068,9 @@ public class ExportTempusWrappedJob : IJob
         dict[key] = current + seconds;
     }
 
-    private static bool TryComputeDemoPlaytime(DemoMeta meta, HashSet<int> userIds,
-        IReadOnlyList<SpawnEvent> spawns,
-        IReadOnlyList<DeathEvent> deaths,
-        IReadOnlyList<TeamChangeEvent> teamChanges,
-        out DemoPlaytimeTotals totals)
-    {
-        totals = new DemoPlaytimeTotals();
-
-        if (!meta.IntervalPerTick.HasValue || meta.IntervalPerTick.Value <= 0)
-        {
-            return false;
-        }
-
-        var demoEndTick = meta.HeaderTicks ?? 0;
-        if (demoEndTick <= 0)
-        {
-            demoEndTick = Math.Max(GetMaxTick(spawns), Math.Max(GetMaxTick(deaths), GetMaxTick(teamChanges)));
-        }
-
-        if (demoEndTick <= 0)
-        {
-            return false;
-        }
-
-        var hadTime = false;
-        foreach (var userId in userIds)
-        {
-            var events = BuildPlayerEvents(userId, spawns, deaths, teamChanges);
-            if (events.Count == 0)
-            {
-                continue;
-            }
-
-            hadTime |= AccumulateEvents(events, demoEndTick, meta.IntervalPerTick.Value, totals);
-        }
-
-        return hadTime;
-    }
-
-    private static List<PlayerEvent> BuildPlayerEvents(int userId, IReadOnlyList<SpawnEvent> spawns,
-        IReadOnlyList<DeathEvent> deaths, IReadOnlyList<TeamChangeEvent> teamChanges)
-    {
-        var events = new List<PlayerEvent>();
-        foreach (var spawn in spawns)
-        {
-            if (spawn.UserId == userId)
-            {
-                events.Add(new PlayerEvent(spawn.Tick, EventKind.Spawn, spawn.Class));
-            }
-        }
-
-        foreach (var death in deaths)
-        {
-            if (death.UserId == userId)
-            {
-                events.Add(new PlayerEvent(death.Tick, EventKind.Death, null));
-            }
-        }
-
-        foreach (var change in teamChanges)
-        {
-            if (change.UserId == userId && IsSpectatorEvent(change))
-            {
-                events.Add(new PlayerEvent(change.Tick, EventKind.Spectator, null));
-            }
-        }
-
-        events.Sort((left, right) =>
-        {
-            var tickCompare = left.Tick.CompareTo(right.Tick);
-            if (tickCompare != 0)
-            {
-                return tickCompare;
-            }
-
-            return left.Kind.CompareTo(right.Kind);
-        });
-
-        return events;
-    }
-
-    private static bool AccumulateEvents(IReadOnlyList<PlayerEvent> events, int demoEndTick, double intervalPerTick,
-        DemoPlaytimeTotals totals)
-    {
-        var alive = false;
-        var currentClass = string.Empty;
-        var startTick = 0;
-        var hasTime = false;
-
-        foreach (var entry in events)
-        {
-            if (entry.Kind == EventKind.Spawn)
-            {
-                if (alive)
-                {
-                    hasTime |= AddInterval(totals, currentClass, startTick, entry.Tick, intervalPerTick);
-                }
-
-                var spawnClass = entry.Class ?? string.Empty;
-                if (IsPlayableClass(spawnClass))
-                {
-                    alive = true;
-                    currentClass = spawnClass;
-                    startTick = entry.Tick;
-                }
-                else
-                {
-                    alive = false;
-                }
-
-                continue;
-            }
-
-            if (!alive)
-            {
-                continue;
-            }
-
-            hasTime |= AddInterval(totals, currentClass, startTick, entry.Tick, intervalPerTick);
-            alive = false;
-        }
-
-        if (alive)
-        {
-            hasTime |= AddInterval(totals, currentClass, startTick, demoEndTick, intervalPerTick);
-        }
-
-        return hasTime;
-    }
-
-    private static bool AddInterval(DemoPlaytimeTotals totals, string className, int startTick, int endTick,
-        double intervalPerTick)
-    {
-        var tickDelta = endTick - startTick;
-        if (tickDelta <= 0)
-        {
-            return false;
-        }
-
-        var seconds = tickDelta * intervalPerTick;
-        if (seconds <= 0)
-        {
-            return false;
-        }
-
-        totals.TotalSeconds += seconds;
-        if (string.Equals(className, "soldier", StringComparison.OrdinalIgnoreCase))
-        {
-            totals.SoldierSeconds += seconds;
-            return true;
-        }
-
-        if (string.Equals(className, "demoman", StringComparison.OrdinalIgnoreCase))
-        {
-            totals.DemoSeconds += seconds;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsPlayableClass(string className)
-    {
-        return !string.IsNullOrWhiteSpace(className) && PlayableClasses.Contains(className);
-    }
-
-    private static bool IsSpectatorEvent(TeamChangeEvent change)
-    {
-        if (change.Disconnect)
-        {
-            return true;
-        }
-
-        return string.Equals(change.Team, "spectator", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static int GetMaxTick(IReadOnlyList<SpawnEvent> events)
-    {
-        return events.Count == 0 ? 0 : events.Max(entry => entry.Tick);
-    }
-
-    private static int GetMaxTick(IReadOnlyList<DeathEvent> events)
-    {
-        return events.Count == 0 ? 0 : events.Max(entry => entry.Tick);
-    }
-
-    private static int GetMaxTick(IReadOnlyList<TeamChangeEvent> events)
-    {
-        return events.Count == 0 ? 0 : events.Max(entry => entry.Tick);
-    }
-
-    private static IEnumerable<List<ulong>> ChunkIds(IReadOnlyList<ulong> demoIds, int size = 900)
-    {
-        for (var i = 0; i < demoIds.Count; i += size)
-        {
-            var chunk = demoIds.Skip(i).Take(size).ToList();
-            if (chunk.Count == 0)
-            {
-                yield break;
-            }
-
-            yield return chunk;
-        }
-    }
-
     private static string FormatHours(double seconds)
     {
-        return (seconds / 3600d).ToString("0.##", CultureInfo.InvariantCulture) + "h";
+        return HumanTime.FormatHours(seconds);
     }
 
     private static string BuildUserKey(long? steamId64, string steamId)
@@ -1338,7 +1094,7 @@ public class ExportTempusWrappedJob : IJob
         var targetKey = BuildUserKey(targetSteamId64, targetSteamId);
 
         var users = new List<DemoUserEntry>();
-        foreach (var chunk in ChunkIds(demoIds))
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var chunkUsers = await db.StvUsers
                 .AsNoTracking()
@@ -1428,7 +1184,7 @@ public class ExportTempusWrappedJob : IJob
         }
 
         // Chat messages per peer in shared demos.
-        foreach (var chunk in ChunkIds(demoIds))
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var chatCounts = await (
                 from chat in db.StvChats.AsNoTracking()
@@ -1464,7 +1220,7 @@ public class ExportTempusWrappedJob : IJob
         }
 
         // Chat buddy counts (nearby messages within N lines).
-        foreach (var chunk in ChunkIds(demoIds))
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
             var lines = await db.StvChats
                 .AsNoTracking()
@@ -1622,764 +1378,105 @@ public class ExportTempusWrappedJob : IJob
         return false;
     }
 
-    private static async Task<List<WrEvent>> ComputeWrEventsAsync(ArchiveDbContext db,
+    private static async Task<List<WrHistoryEntry>> ComputeWrEntriesAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds,
-        IReadOnlyDictionary<ulong, DemoMeta> demoMetaById,
+        IReadOnlyDictionary<ulong, PlaytimeDemoMeta> demoMetaById,
         IReadOnlyDictionary<ulong, double> demoDateById,
         IReadOnlyDictionary<ulong, HashSet<string>> targetNamesByDemoId,
         CancellationToken cancellationToken)
     {
-        var events = new List<WrEvent>();
+        var demoDates = demoDateById.ToDictionary(entry => entry.Key,
+            entry => (DateTime?)ArchiveUtils.GetDateFromTimestamp(entry.Value));
 
-        foreach (var chunk in ChunkIds(demoIds))
+        var demoUsers = await ExtractWrHistoryFromChatJob.LoadDemoUsersAsync(db, demoIds, cancellationToken);
+
+        var events = new List<WrHistoryEntry>();
+
+        foreach (var chunk in DbChunk.Chunk(demoIds))
         {
-            var candidates = await db.StvChats
+            var tempusChats = await db.StvChats
                 .AsNoTracking()
                 .Where(chat => chunk.Contains(chat.DemoId))
-                .Where(chat =>
-                    (EF.Functions.Like(chat.Text, "Tempus | (%")
-                     && ((EF.Functions.Like(chat.Text, "%map run%") && EF.Functions.Like(chat.Text, "%WR%"))
-                         || EF.Functions.Like(chat.Text, "%beat the map record%")
-                         || EF.Functions.Like(chat.Text, "%set the first map record%")
-                         || EF.Functions.Like(chat.Text, "%is ranked%with time%")
-                         || EF.Functions.Like(chat.Text, "%set Bonus%")
-                         || EF.Functions.Like(chat.Text, "%set Course%")
-                         || EF.Functions.Like(chat.Text, "%set C%")
-                         || EF.Functions.Like(chat.Text, "%broke%Bonus%")
-                         || EF.Functions.Like(chat.Text, "%broke%Course%")
-                         || EF.Functions.Like(chat.Text, "%broke C%")
-                         || EF.Functions.Like(chat.Text, "% WR)%")))
-                    || EF.Functions.Like(chat.Text, ":: (%"))
-                .Select(chat => new WrChatCandidate
-                {
-                    DemoId = chat.DemoId,
-                    Text = chat.Text
-                })
+                .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
+                .Where(chat => (EF.Functions.Like(chat.Text, "%map run%")
+                                && EF.Functions.Like(chat.Text, "%WR%"))
+                               || EF.Functions.Like(chat.Text, "%beat the map record%")
+                               || EF.Functions.Like(chat.Text, "%set the first map record%")
+                               || EF.Functions.Like(chat.Text, "%is ranked%with time%")
+                               || EF.Functions.Like(chat.Text, "%set Bonus%")
+                               || EF.Functions.Like(chat.Text, "%set Course%")
+                               || EF.Functions.Like(chat.Text, "%set C%")
+                               || EF.Functions.Like(chat.Text, "%broke%Bonus%")
+                               || EF.Functions.Like(chat.Text, "%broke%Course%")
+                               || EF.Functions.Like(chat.Text, "%broke C%")
+                               || EF.Functions.Like(chat.Text, "% WR)%"))
+                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
                 .ToListAsync(cancellationToken);
 
-            foreach (var candidate in candidates)
+            foreach (var chat in tempusChats)
             {
-                if (!demoMetaById.TryGetValue(candidate.DemoId, out var meta))
+                if (!demoMetaById.TryGetValue(chat.DemoId, out var meta))
                 {
                     continue;
                 }
 
-                if (!targetNamesByDemoId.TryGetValue(candidate.DemoId, out var names) || names.Count == 0)
+                if (!targetNamesByDemoId.TryGetValue(chat.DemoId, out var names) || names.Count == 0)
                 {
                     continue;
                 }
 
-                if (!TryParseWrEvent(candidate.Text, meta.Map, out var parsed) || parsed is null)
+                var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, meta.Map, chat.Text,
+                    chat.FromUserId);
+
+                var entry = ExtractWrHistoryFromChatJob.TryParseTempusRecord(candidate, meta.Map, demoDates, demoUsers);
+                if (entry == null)
                 {
                     continue;
                 }
 
-                if (!IsMatchingName(parsed.Player, names))
+                if (!IsMatchingName(entry.Player, names))
                 {
                     continue;
                 }
 
-                if (!demoDateById.TryGetValue(candidate.DemoId, out var ts))
+                events.Add(entry);
+            }
+
+            var ircChats = await db.StvChats
+                .AsNoTracking()
+                .Where(chat => chunk.Contains(chat.DemoId))
+                .Where(chat => EF.Functions.Like(chat.Text, ":: Tempus -%")
+                               || EF.Functions.Like(chat.Text, ":: (%"))
+                .Where(chat => chat.Text.Contains(" WR: "))
+                .Where(chat => chat.Text.Contains(" broke ") || chat.Text.Contains(" set "))
+                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
+                .ToListAsync(cancellationToken);
+
+            foreach (var chat in ircChats)
+            {
+                if (!targetNamesByDemoId.TryGetValue(chat.DemoId, out var names) || names.Count == 0)
                 {
                     continue;
                 }
 
-                var dtUtc = GetUtcDateFromTimestamp(ts);
-                events.Add(new WrEvent(dtUtc, candidate.DemoId, parsed.Map ?? meta.Map, parsed.Class, parsed.Source,
-                    parsed.RecordTime, parsed.RunTime, parsed.Split, parsed.Improvement, parsed.Inferred, candidate.Text));
+                var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, null, chat.Text,
+                    chat.FromUserId);
+                var entry = ExtractWrHistoryFromChatJob.TryParseIrcRecord(candidate, null, demoDates, demoUsers);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                if (!IsMatchingName(entry.Player, names))
+                {
+                    continue;
+                }
+
+                events.Add(entry);
             }
         }
-
-        events.Sort((left, right) =>
-        {
-            var dateCompare = left.TimestampUtc.CompareTo(right.TimestampUtc);
-            if (dateCompare != 0)
-            {
-                return dateCompare;
-            }
-
-            var demoCompare = left.DemoId.CompareTo(right.DemoId);
-            if (demoCompare != 0)
-            {
-                return demoCompare;
-            }
-
-            return string.Compare(left.RawText, right.RawText, StringComparison.Ordinal);
-        });
 
         return events;
-    }
-
-    private static string GetWrBucketKey(WrEvent wr)
-    {
-        var source = NormalizeWrSource(wr.Source);
-        if (string.Equals(source, "MapRecord", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "FirstRecord", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "MapRun", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "Ranked", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "IRC", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(source, "Compact", StringComparison.OrdinalIgnoreCase))
-        {
-            source = "Map";
-        }
-
-        return wr.Map + "|" + wr.Class + "|" + source;
-    }
-
-    private static string NormalizeWrSource(string source)
-    {
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            return string.Empty;
-        }
-
-        var normalized = source.Trim();
-        const string suffix = " First";
-        if (normalized.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-        {
-            normalized = normalized.Substring(0, normalized.Length - suffix.Length).Trim();
-        }
-
-        return normalized;
-    }
-
-    private static bool IsLookupWr(WrEvent wr)
-    {
-        return string.Equals(wr.Source, "Compact", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static List<WrEvent> DedupWrImprovements(IEnumerable<WrEvent> events)
-    {
-        var ordered = events
-            .OrderBy(entry => entry.TimestampUtc)
-            .ThenBy(entry => entry.DemoId)
-            .ThenBy(entry => entry.Map, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(entry => entry.RawText, StringComparer.Ordinal)
-            .ToList();
-
-        var bestByBucket = new Dictionary<string, int>(StringComparer.Ordinal);
-        var improvements = new List<WrEvent>();
-        foreach (var wr in ordered)
-        {
-            if (!TryParseTimeCentiseconds(wr.RecordTime, out var centis))
-            {
-                continue;
-            }
-
-            var bucket = GetWrBucketKey(wr);
-            if (!bestByBucket.TryGetValue(bucket, out var best))
-            {
-                bestByBucket[bucket] = centis;
-                improvements.Add(wr);
-                continue;
-            }
-
-            if (centis < best)
-            {
-                bestByBucket[bucket] = centis;
-                improvements.Add(wr);
-            }
-        }
-
-        return improvements;
-    }
-
-    private const string TimePattern = @"\d{1,2}:\d{2}(?::\d{2})?\.\d{2}";
-    private const string SignedTimePattern = @"[+-]?" + TimePattern;
-
-    private static readonly Regex MapRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) beat the map record: (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex MapRecordNoSplitRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) beat the map record: (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex FirstMapRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) set the first map record: (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex BonusRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Bonus\s*#?(?<index>\d+) (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex CourseRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Course\s*#?(?<index>\d+) (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex CourseSegmentRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*C(?<index>\d+)\s*-\s*(?<name>.+?) (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SetBonusRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) set Bonus\s*#?(?<index>\d+) (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SetCourseRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) set Course\s*#?(?<index>\d+) (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SetCourseSegmentRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) set\s+(?:~[^~]+~\s*)*C(?<index>\d+)\s*-\s*(?<name>.+?) (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex MapRunRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex RankedTimeRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) is ranked (?<rank>\d+)/(?<total>\d+) on (?<map>[^ ]+)(?:\s+(?<segment>Bonus|Course)\s+(?<index>\d+))? with time: (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex IrcWrRegex = new(
-        $@"^:: \((?<class>[^)]+)\) (?<player>.+?) broke (?<map>[^ ]+) WR: (?<time>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex IrcSetRegex = new(
-        $@"^:: \((?<class>[^)]+)\) (?<player>.+?) set (?<map>[^ ]+) WR: (?<time>{TimePattern})\!?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex CompactRecordRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+?) (?<label>WR|PR)\) (?<map>.+?) :: (?<time>{TimePattern}) :: (?<player>.+)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static bool TryParseWrEvent(string text, string defaultMap, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-
-        if (TryParseMapRecord(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseFirstRecord(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseBonus(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseSetBonus(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseCourse(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseSetCourse(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseCourseSegment(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseSetCourseSegment(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseMapRun(text, defaultMap, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseRanked(text, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseIrc(text, out parsed))
-        {
-            return true;
-        }
-
-        if (TryParseCompact(text, out parsed))
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryParseMapRecord(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = MapRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            match = MapRecordNoSplitRegex.Match(text);
-            if (!match.Success)
-            {
-                return false;
-            }
-        }
-
-        var label = match.Groups["label"].Success ? match.Groups["label"].Value : "WR";
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var split = match.Groups["split"].Success ? match.Groups["split"].Value : null;
-        var improvement = match.Groups["improvement"].Success ? match.Groups["improvement"].Value : null;
-
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "MapRecord", time, null, split, improvement, false);
-        return true;
-    }
-
-    private static bool TryParseFirstRecord(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = FirstMapRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "FirstRecord", time, null, null, null, false);
-        return true;
-    }
-
-    private static bool TryParseBonus(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = BonusRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var label = match.Groups["label"].Success ? match.Groups["label"].Value : "WR";
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        var split = match.Groups["split"].Success ? match.Groups["split"].Value : null;
-        var improvement = match.Groups["improvement"].Success ? match.Groups["improvement"].Value : null;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "Bonus " + index, time, null, split, improvement,
-            false);
-        return true;
-    }
-
-    private static bool TryParseSetBonus(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = SetBonusRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "Bonus " + index + " First", time, null, null, null,
-            false);
-        return true;
-    }
-
-    private static bool TryParseCourse(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = CourseRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var label = match.Groups["label"].Success ? match.Groups["label"].Value : "WR";
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        var split = match.Groups["split"].Success ? match.Groups["split"].Value : null;
-        var improvement = match.Groups["improvement"].Success ? match.Groups["improvement"].Value : null;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "Course " + index, time, null, split, improvement,
-            false);
-        return true;
-    }
-
-    private static bool TryParseSetCourse(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = SetCourseRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "Course " + index + " First", time, null, null, null,
-            false);
-        return true;
-    }
-
-    private static bool TryParseCourseSegment(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = CourseSegmentRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var label = match.Groups["label"].Success ? match.Groups["label"].Value : "WR";
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        var name = match.Groups["name"].Value.Trim();
-        var segment = "C" + index + " - " + name;
-        var split = match.Groups["split"].Success ? match.Groups["split"].Value : null;
-        var improvement = match.Groups["improvement"].Success ? match.Groups["improvement"].Value : null;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, segment, time, null, split, improvement, false);
-        return true;
-    }
-
-    private static bool TryParseSetCourseSegment(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = SetCourseSegmentRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var index = match.Groups["index"].Value;
-        var name = match.Groups["name"].Value.Trim();
-        var segment = "C" + index + " - " + name;
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, segment + " First", time, null, null, null, false);
-        return true;
-    }
-
-    private static bool TryParseMapRun(string text, string mapName, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = MapRunRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var label = match.Groups["label"].Value;
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var runTime = match.Groups["run"].Value;
-        var splitRaw = match.Groups["split"].Value;
-        var split = splitRaw;
-        var improvement = match.Groups["improvement"].Success ? match.Groups["improvement"].Value : null;
-
-        if (!TryComputeRecordTime(runTime, splitRaw, out var recordTime, out var inferred))
-        {
-            return false;
-        }
-
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, "MapRun", recordTime, runTime, split, improvement,
-            inferred);
-        return true;
-    }
-
-    private static bool TryParseRanked(string text, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = RankedTimeRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        if (!int.TryParse(match.Groups["rank"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var rank)
-            || rank != 1)
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var time = match.Groups["time"].Value;
-        var mapName = match.Groups["map"].Value;
-        var segment = match.Groups["segment"].Value;
-        var index = match.Groups["index"].Value;
-        var source = "Ranked";
-        if (!string.IsNullOrWhiteSpace(segment))
-        {
-            source = string.IsNullOrWhiteSpace(index) ? segment : segment + " " + index;
-        }
-
-        parsed = new ParsedWrEvent(player, detectedClass, mapName, source, time, null, null, null, true);
-        return true;
-    }
-
-    private static bool TryParseIrc(string text, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = IrcWrRegex.Match(text);
-        if (match.Success)
-        {
-            var label = match.Groups["label"].Success ? match.Groups["label"].Value : "WR";
-            if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var detectedClass = NormalizeClass(match.Groups["class"].Value);
-            var player = match.Groups["player"].Value.Trim();
-            var map = match.Groups["map"].Value;
-            var time = match.Groups["time"].Value;
-            var split = match.Groups["split"].Success ? match.Groups["split"].Value : null;
-            parsed = new ParsedWrEvent(player, detectedClass, map, "IRC", time, null, split, null, false);
-            return true;
-        }
-
-        match = IrcSetRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var detectedClass2 = NormalizeClass(match.Groups["class"].Value);
-        var player2 = match.Groups["player"].Value.Trim();
-        var map2 = match.Groups["map"].Value;
-        var time2 = match.Groups["time"].Value;
-        parsed = new ParsedWrEvent(player2, detectedClass2, map2, "IRC", time2, null, null, null, false);
-        return true;
-    }
-
-    private static bool TryParseCompact(string text, out ParsedWrEvent? parsed)
-    {
-        parsed = null;
-        var match = CompactRecordRegex.Match(text);
-        if (!match.Success)
-        {
-            return false;
-        }
-
-        var label = match.Groups["label"].Value;
-        if (!string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var detectedClass = NormalizeClass(match.Groups["class"].Value);
-        var player = match.Groups["player"].Value.Trim();
-        var map = match.Groups["map"].Value;
-        var time = match.Groups["time"].Value;
-        parsed = new ParsedWrEvent(player, detectedClass, map, "Compact", time, null, null, null, false);
-        return true;
-    }
-
-    private static string NormalizeClass(string value)
-    {
-        if (string.Equals(value, "Soldier", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Solly";
-        }
-
-        if (string.Equals(value, "Demoman", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Demo";
-        }
-
-        return value.Trim();
-    }
-
-    private static bool TryComputeRecordTime(string runTime, string splitRaw, out string recordTime, out bool inferred)
-    {
-        recordTime = string.Empty;
-        inferred = false;
-
-        if (!TryParseTimeCentiseconds(runTime, out var runCentis))
-        {
-            return false;
-        }
-
-        if (!TryParseSignedTimeCentiseconds(splitRaw, out var splitCentis, out var sign))
-        {
-            return false;
-        }
-
-        if (sign == 0)
-        {
-            return false;
-        }
-
-        if (sign < 0)
-        {
-            recordTime = runTime;
-            inferred = false;
-            return true;
-        }
-
-        var inferredCentis = runCentis - splitCentis;
-        if (inferredCentis <= 0)
-        {
-            return false;
-        }
-
-        recordTime = FormatTimeFromCentiseconds(inferredCentis);
-        inferred = true;
-        return true;
-    }
-
-    private static bool TryParseTimeCentiseconds(string value, out int centiseconds)
-    {
-        centiseconds = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var parts = value.Trim().Split(':');
-        if (parts.Length is < 2 or > 3)
-        {
-            return false;
-        }
-
-        var hours = 0;
-        var minutesPartIndex = 0;
-        if (parts.Length == 3)
-        {
-            if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours) || hours < 0)
-            {
-                return false;
-            }
-
-            minutesPartIndex = 1;
-        }
-
-        if (!int.TryParse(parts[minutesPartIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes)
-            || minutes < 0)
-        {
-            return false;
-        }
-
-        var secondsParts = parts[minutesPartIndex + 1].Split('.');
-        if (secondsParts.Length != 2)
-        {
-            return false;
-        }
-
-        if (!int.TryParse(secondsParts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
-            || seconds < 0)
-        {
-            return false;
-        }
-
-        if (!int.TryParse(secondsParts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var centis)
-            || centis < 0 || centis > 99)
-        {
-            return false;
-        }
-
-        var totalSeconds = hours * 3600 + minutes * 60 + seconds;
-        centiseconds = totalSeconds * 100 + centis;
-        return true;
-    }
-
-    private static bool TryParseSignedTimeCentiseconds(string value, out int centiseconds, out int sign)
-    {
-        centiseconds = 0;
-        sign = 0;
-
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var raw = value.Trim();
-        if (raw.StartsWith('+'))
-        {
-            sign = 1;
-            raw = raw.Substring(1);
-        }
-        else if (raw.StartsWith('-'))
-        {
-            sign = -1;
-            raw = raw.Substring(1);
-        }
-        else
-        {
-            return false;
-        }
-
-        return TryParseTimeCentiseconds(raw, out centiseconds);
-    }
-
-    private static string FormatTimeFromCentiseconds(int centiseconds)
-    {
-        if (centiseconds < 0)
-        {
-            centiseconds = -centiseconds;
-        }
-
-        var totalSeconds = centiseconds / 100;
-        var cs = centiseconds % 100;
-        var seconds = totalSeconds % 60;
-        var totalMinutes = totalSeconds / 60;
-        var minutes = totalMinutes % 60;
-        var hours = totalMinutes / 60;
-
-        if (hours > 0)
-        {
-            return string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}:{2:00}.{3:00}", hours, minutes, seconds,
-                cs);
-        }
-
-        return string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}.{2:00}", minutes, seconds, cs);
-    }
-
-    private sealed record ParsedWrEvent(string Player, string Class, string? Map, string Source, string RecordTime,
-        string? RunTime, string? Split, string? Improvement, bool Inferred);
-
-    private sealed record WrEvent(DateTime TimestampUtc, ulong DemoId, string Map, string Class, string Source,
-        string RecordTime, string? RunTime, string? Split, string? Improvement, bool Inferred, string RawText);
-
-    private sealed class WrChatCandidate
-    {
-        public ulong DemoId { get; init; }
-        public string Text { get; init; } = string.Empty;
     }
 
     private sealed class DemoUserEntry
@@ -2449,8 +1546,6 @@ public class ExportTempusWrappedJob : IJob
         public int Count { get; set; }
     }
 
-    private sealed record DemoMeta(ulong DemoId, string Map, string Server, double? IntervalPerTick, int? HeaderTicks);
-
     private sealed class PlaytimeResult
     {
         public int DemosWithTime { get; set; }
@@ -2488,28 +1583,6 @@ public class ExportTempusWrappedJob : IJob
 
     private sealed record ScoredChat(DateTime TimestampUtc, ulong DemoId, string Map, string Server, string FullText,
         string Body, double Sentiment);
-
-    private sealed record DemoPlaytimeTotals
-    {
-        public double SoldierSeconds { get; set; }
-        public double DemoSeconds { get; set; }
-        public double TotalSeconds { get; set; }
-    }
-
-    private sealed record SpawnEvent(ulong DemoId, int UserId, int Tick, string Class, string Team);
-
-    private sealed record DeathEvent(ulong DemoId, int UserId, int Tick);
-
-    private sealed record TeamChangeEvent(ulong DemoId, int UserId, int Tick, string Team, bool Disconnect);
-
-    private sealed record PlayerEvent(int Tick, EventKind Kind, string? Class);
-
-    private enum EventKind
-    {
-        Spectator = 0,
-        Death = 1,
-        Spawn = 2
-    }
 
     private sealed class WrappedChatRow
     {

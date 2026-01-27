@@ -7,11 +7,8 @@ namespace TempusDemoArchive.Jobs;
 
 public class ExportPlayerMapRunHistoryJob : IJob
 {
-    private const string TimePattern = @"\d{1,2}:\d{2}(?::\d{2})?\.\d{2}";
-    private const string SignedTimePattern = @"[+-]?" + TimePattern;
-
     private static readonly Regex MapRunRegex = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{SignedTimePattern})\)(?: \| (?<improvement>{TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
@@ -110,9 +107,9 @@ public class ExportPlayerMapRunHistoryJob : IJob
                 candidate.Map,
                 detectedClass,
                 label.ToUpperInvariant(),
-                NormalizeTime(match.Groups["run"].Value),
-                NormalizeSignedTime(match.Groups["split"].Value),
-                match.Groups["improvement"].Success ? NormalizeTime(match.Groups["improvement"].Value) : null));
+                TempusTime.NormalizeTime(match.Groups["run"].Value),
+                TempusTime.NormalizeSignedTime(match.Groups["split"].Value),
+                match.Groups["improvement"].Success ? TempusTime.NormalizeTime(match.Groups["improvement"].Value) : null));
         }
 
         if (results.Count == 0)
@@ -176,86 +173,6 @@ public class ExportPlayerMapRunHistoryJob : IJob
         return value;
     }
 
-    private static string NormalizeTime(string value)
-    {
-        return TryParseTimeSeconds(value, out var seconds) ? FormatTime(seconds) : value;
-    }
-
-    private static string NormalizeSignedTime(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
-        var sign = string.Empty;
-        var raw = value;
-        if (value.StartsWith("+", StringComparison.Ordinal) || value.StartsWith("-", StringComparison.Ordinal))
-        {
-            sign = value.Substring(0, 1);
-            raw = value.Substring(1);
-        }
-
-        return TryParseTimeSeconds(raw, out var seconds)
-            ? sign + FormatTime(seconds)
-            : value;
-    }
-
-    private static bool TryParseTimeSeconds(string value, out double seconds)
-    {
-        seconds = 0;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var parts = value.Split(':');
-        if (parts.Length is < 2 or > 3)
-        {
-            return false;
-        }
-
-        if (!double.TryParse(parts[^1], NumberStyles.Float, CultureInfo.InvariantCulture, out var secPart))
-        {
-            return false;
-        }
-
-        if (!int.TryParse(parts[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes))
-        {
-            return false;
-        }
-
-        var hours = 0;
-        if (parts.Length == 3
-            && !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours))
-        {
-            return false;
-        }
-
-        seconds = hours * 3600 + minutes * 60 + secPart;
-        return true;
-    }
-
-    private static string FormatTime(double seconds)
-    {
-        var rounded = Math.Round(seconds, 2, MidpointRounding.AwayFromZero);
-        if (rounded < 0)
-        {
-            rounded = 0;
-        }
-
-        var hours = (int)(rounded / 3600);
-        var minutes = (int)((rounded % 3600) / 60);
-        var secs = rounded % 60;
-        var secondsText = secs.ToString("00.00", CultureInfo.InvariantCulture);
-        if (hours > 0)
-        {
-            return $"{hours}:{minutes:D2}:{secondsText}";
-        }
-
-        return $"{minutes:D2}:{secondsText}";
-    }
-
     private static async Task<Dictionary<ulong, DateTime?>> LoadDemoDatesAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
     {
@@ -264,11 +181,16 @@ public class ExportPlayerMapRunHistoryJob : IJob
             return new Dictionary<ulong, DateTime?>();
         }
 
-        var demoDates = await db.Demos
-            .AsNoTracking()
-            .Where(x => demoIds.Contains(x.Id))
-            .Select(x => new { x.Id, x.Date })
-            .ToListAsync(cancellationToken);
+        var demoDates = new List<(ulong Id, double Date)>();
+        foreach (var chunk in DbChunk.Chunk(demoIds))
+        {
+            var chunkDates = await db.Demos
+                .AsNoTracking()
+                .Where(x => chunk.Contains(x.Id))
+                .Select(x => new { x.Id, x.Date })
+                .ToListAsync(cancellationToken);
+            demoDates.AddRange(chunkDates.Select(x => (x.Id, x.Date)));
+        }
 
         return demoDates.ToDictionary(x => x.Id, x => (DateTime?)ArchiveUtils.GetDateFromTimestamp(x.Date));
     }
@@ -281,10 +203,15 @@ public class ExportPlayerMapRunHistoryJob : IJob
             return new Dictionary<ulong, DemoUsers>();
         }
 
-        var users = await db.StvUsers
-            .AsNoTracking()
-            .Where(x => demoIds.Contains(x.DemoId))
-            .ToListAsync(cancellationToken);
+        var users = new List<StvUser>();
+        foreach (var chunk in DbChunk.Chunk(demoIds))
+        {
+            var chunkUsers = await db.StvUsers
+                .AsNoTracking()
+                .Where(x => chunk.Contains(x.DemoId))
+                .ToListAsync(cancellationToken);
+            users.AddRange(chunkUsers);
+        }
 
         return BuildDemoUsers(users);
     }
