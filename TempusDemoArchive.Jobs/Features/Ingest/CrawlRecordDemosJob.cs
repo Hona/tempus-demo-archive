@@ -111,8 +111,7 @@ public class CrawlRecordDemosJob : IJob
 
     private static CrawlState? LoadState()
     {
-        if (string.Equals(Environment.GetEnvironmentVariable("TEMPUS_CRAWL_RESET"), "1",
-                StringComparison.OrdinalIgnoreCase))
+        if (EnvVar.GetBool("TEMPUS_CRAWL_RESET"))
         {
             if (File.Exists(StateFilePath))
             {
@@ -368,13 +367,7 @@ public class CrawlRecordDemosJob : IJob
 
     private static int GetMinIntervalMs()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_CRAWL_MIN_INTERVAL_MS");
-        if (int.TryParse(value, out var parsed) && parsed >= 0)
-        {
-            return parsed;
-        }
-
-        return DefaultMinIntervalMs;
+        return EnvVar.GetNonNegativeInt("TEMPUS_CRAWL_MIN_INTERVAL_MS", DefaultMinIntervalMs);
     }
 
     private sealed class RateLimitCounter

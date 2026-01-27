@@ -125,7 +125,7 @@ public class ReparseDemosJob : IJob
 
     private static List<ulong>? GetExplicitDemoIds()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_REPARSE_DEMO_IDS");
+        var value = EnvVar.GetString("TEMPUS_REPARSE_DEMO_IDS");
         if (string.IsNullOrWhiteSpace(value))
         {
             return null;
@@ -142,31 +142,22 @@ public class ReparseDemosJob : IJob
 
     private static int GetLimit()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_REPARSE_LIMIT");
-        return int.TryParse(value, out var parsed) ? parsed : 0;
+        return EnvVar.GetInt("TEMPUS_REPARSE_LIMIT", 0, min: 0);
     }
 
     private static int GetLogEvery()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_REPARSE_LOG_EVERY");
-        if (int.TryParse(value, out var parsed) && parsed > 0)
-        {
-            return parsed;
-        }
-
-        return DefaultLogEvery;
+        return EnvVar.GetPositiveInt("TEMPUS_REPARSE_LOG_EVERY", DefaultLogEvery);
     }
 
     private static bool GetVerbose()
     {
-        return string.Equals(Environment.GetEnvironmentVariable("TEMPUS_REPARSE_VERBOSE"), "1",
-            StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_REPARSE_VERBOSE");
     }
 
     private static ReparseState? LoadState()
     {
-        if (string.Equals(Environment.GetEnvironmentVariable("TEMPUS_REPARSE_RESET"), "1",
-                StringComparison.OrdinalIgnoreCase))
+        if (EnvVar.GetBool("TEMPUS_REPARSE_RESET"))
         {
             if (File.Exists(StateFilePath))
             {

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Humanizer;
+using Spectre.Console;
 using TempusDemoArchive.Jobs;
 
 ArchivePath.EnsureAllCreated();
@@ -49,10 +50,18 @@ static IJob? ResolveJob(string[] args, IReadOnlyList<JobDefinition> jobs)
 {
     if (args.Any(arg => string.Equals(arg, "--list", StringComparison.OrdinalIgnoreCase)))
     {
-        foreach (var definition in jobs)
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn("Category")
+            .AddColumn("Id")
+            .AddColumn("Description");
+
+        foreach (var definition in jobs.OrderBy(job => job.Category).ThenBy(job => job.Id))
         {
-            Console.WriteLine($"{definition.Id} - {definition.Description}");
+            table.AddRow(definition.Category, definition.Id, definition.Description);
         }
+
+        AnsiConsole.Write(table);
 
         return null;
     }
@@ -70,27 +79,15 @@ static IJob? ResolveJob(string[] args, IReadOnlyList<JobDefinition> jobs)
         return match.Factory();
     }
 
-    Console.WriteLine("Select a job to run:");
-    for (var i = 0; i < jobs.Count; i++)
-    {
-        var definition = jobs[i];
-        Console.WriteLine($"{i + 1}. {definition.DisplayName} ({definition.Id})");
-    }
+    var selection = AnsiConsole.Prompt(
+        new SelectionPrompt<JobDefinition>()
+            .Title("Select a job to run")
+            .PageSize(20)
+            .MoreChoicesText("(Move up/down to see more)")
+            .AddChoices(jobs.OrderBy(job => job.Category).ThenBy(job => job.DisplayName))
+            .UseConverter(job => $"{job.Category} | {job.DisplayName} ({job.Id})"));
 
-    if (!int.TryParse(Console.ReadLine(), out var jobIndex))
-    {
-        Console.WriteLine("Invalid selection.");
-        return null;
-    }
-
-    jobIndex -= 1;
-    if (jobIndex < 0 || jobIndex >= jobs.Count)
-    {
-        Console.WriteLine("Invalid selection.");
-        return null;
-    }
-
-    return jobs[jobIndex].Factory();
+    return selection.Factory();
 }
 
 static string? GetJobId(string[] args)

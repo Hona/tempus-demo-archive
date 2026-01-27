@@ -107,7 +107,7 @@ public class PlotUserSentimentTimelineJob : IJob
 
     private static string GetBucket()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_SENTIMENT_BUCKET");
+        var value = EnvVar.GetString("TEMPUS_SENTIMENT_BUCKET");
         if (string.Equals(value, "year", StringComparison.OrdinalIgnoreCase))
         {
             return "year";

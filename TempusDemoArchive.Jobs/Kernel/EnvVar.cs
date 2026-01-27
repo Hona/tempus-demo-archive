@@ -47,6 +47,38 @@ internal static class EnvVar
         return Math.Clamp(parsed, min, max);
     }
 
+    public static int GetPositiveInt(string name, int defaultValue, int max = int.MaxValue)
+    {
+        var value = GetString(name);
+        if (value == null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            return defaultValue;
+        }
+
+        return parsed > max ? max : parsed;
+    }
+
+    public static int GetNonNegativeInt(string name, int defaultValue, int max = int.MaxValue)
+    {
+        var value = GetString(name);
+        if (value == null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+        {
+            return defaultValue;
+        }
+
+        return parsed > max ? max : parsed;
+    }
+
     private static bool IsTruthy(string value)
     {
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)

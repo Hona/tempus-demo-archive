@@ -193,48 +193,27 @@ public class ParseDemosJob : IJob
 
     private static int GetParallelism()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_PARALLELISM");
-        if (int.TryParse(value, out var parsed) && parsed > 0)
-        {
-            return parsed;
-        }
-
-        return DefaultParallelism;
+        return EnvVar.GetPositiveInt("TEMPUS_PARSE_PARALLELISM", DefaultParallelism);
     }
 
     private static int GetBatchSize()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_BATCH_SIZE");
-        if (int.TryParse(value, out var parsed) && parsed > 0)
-        {
-            return parsed;
-        }
-
-        return DefaultBatchSize;
+        return EnvVar.GetPositiveInt("TEMPUS_PARSE_BATCH_SIZE", DefaultBatchSize);
     }
 
     private static int GetLogEvery()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_LOG_EVERY");
-        if (int.TryParse(value, out var parsed) && parsed > 0)
-        {
-            return parsed;
-        }
-
-        return DefaultLogEvery;
+        return EnvVar.GetPositiveInt("TEMPUS_PARSE_LOG_EVERY", DefaultLogEvery);
     }
 
     private static bool GetVerbose()
     {
-        return string.Equals(Environment.GetEnvironmentVariable("TEMPUS_PARSE_VERBOSE"), "1",
-            StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_PARSE_VERBOSE");
     }
 
     private static bool GetIncludeFailed()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_PARSE_INCLUDE_FAILED");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_PARSE_INCLUDE_FAILED");
     }
 
     internal static async Task<ParseOutcome> ProcessDemoAsync(ulong demoId, HttpClient httpClient,

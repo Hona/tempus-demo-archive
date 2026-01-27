@@ -660,7 +660,7 @@ public class ExportTempusWrappedJob : IJob
 
     private static string? GetPlayerIdentifier()
     {
-        var env = Environment.GetEnvironmentVariable("TEMPUS_WRAPPED_USER");
+        var env = EnvVar.GetString("TEMPUS_WRAPPED_USER");
         if (!string.IsNullOrWhiteSpace(env))
         {
             return env.Trim();
@@ -674,7 +674,7 @@ public class ExportTempusWrappedJob : IJob
     {
         var defaultYear = DateTimeOffset.UtcNow.Year - 1;
 
-        var env = Environment.GetEnvironmentVariable("TEMPUS_WRAPPED_YEAR");
+        var env = EnvVar.GetString("TEMPUS_WRAPPED_YEAR");
         if (int.TryParse(env, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
         {
             return parsed;

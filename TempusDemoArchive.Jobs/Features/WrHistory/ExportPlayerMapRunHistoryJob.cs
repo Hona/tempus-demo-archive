@@ -133,9 +133,7 @@ public class ExportPlayerMapRunHistoryJob : IJob
 
     private static bool GetIncludeWr()
     {
-        var value = Environment.GetEnvironmentVariable("TEMPUS_MAPRUN_INCLUDE_WR");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        return EnvVar.GetBool("TEMPUS_MAPRUN_INCLUDE_WR");
     }
 
     private static TargetIdentity? ResolveTargetIdentity(string identifier)
