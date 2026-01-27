@@ -52,6 +52,8 @@ public static class JobCatalog
             "Estimate who spectated you and who you spectated.", () => new ComputeUserSpectatorPeersJob()),
         new("player-maprun", "Export player map run history", "analysis",
             "Export PR/WR map run history for a player.", () => new ExportPlayerMapRunHistoryJob()),
+        new("wr-history-all", "Export WR history (all maps)", "analysis",
+            "Export WR history CSVs for all maps/classes in one pass.", () => new ExportWrHistoryAllMapsJob()),
         new("sentiment-known", "Filter known-player sentiment", "analysis",
             "Filter sentiment results to a known player list.", () => new FilterKnownPlayersSentimentJob()),
         new("wr-history", "Extract WR history", "analysis",

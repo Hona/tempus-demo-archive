@@ -53,8 +53,9 @@ public class ExtractWrHistoryFromChatJob : IJob
         $@"^Tempus \| \((?<class>[^)]+?) (?<label>WR|PR)\) (?<map>.+?) :: (?<time>{TimePattern}) :: (?<player>.+)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    private readonly record struct ChatCandidate(ulong DemoId, string? Map, string Text, int? FromUserId);
-    private sealed record DemoUsers(Dictionary<int, UserIdentity> ByUserId, Dictionary<string, UserIdentity?> ByName);
+    internal readonly record struct ChatCandidate(ulong DemoId, string? Map, string Text, int? FromUserId);
+    internal sealed record DemoUsers(Dictionary<int, UserIdentity> ByUserId,
+        Dictionary<string, List<UserIdentity>> ByName);
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
@@ -216,7 +217,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         Console.WriteLine($"CSV: {csvPath}");
     }
 
-    private static WrHistoryEntry? TryParseTempusRecord(ChatCandidate candidate, string mapInput,
+    internal static WrHistoryEntry? TryParseTempusRecord(ChatCandidate candidate, string mapInput,
         IReadOnlyDictionary<ulong, DateTime?> demoDates, IReadOnlyDictionary<ulong, DemoUsers> demoUsers)
     {
         if (TryParseCompactRecord(candidate, mapInput, demoDates, demoUsers, out var compactEntry))
@@ -277,7 +278,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         return null;
     }
 
-    private static WrHistoryEntry? TryParseIrcRecord(ChatCandidate candidate, string map,
+    internal static WrHistoryEntry? TryParseIrcRecord(ChatCandidate candidate, string? map,
         IReadOnlyDictionary<ulong, DateTime?> demoDates, IReadOnlyDictionary<ulong, DemoUsers> demoUsers)
     {
         var lastLine = candidate.Text.Split('\n').LastOrDefault() ?? string.Empty;
@@ -295,7 +296,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         var mapName = match.Groups["map"].Value;
-        if (!IsMapMatch(mapName, map))
+        if (!string.IsNullOrWhiteSpace(map) && !IsMapMatch(mapName, map))
         {
             return null;
         }
@@ -322,10 +323,11 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         var source = isSet ? "IRCSet" : "IRC";
         return new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
-            null, false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            null, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
     }
 
     private static bool TryParseCompactRecord(ChatCandidate candidate, string mapInput,
@@ -335,6 +337,11 @@ public class ExtractWrHistoryFromChatJob : IJob
         entry = null;
         var match = CompactRecordRegex.Match(candidate.Text);
         if (!match.Success)
+        {
+            return false;
+        }
+
+        if (match.Groups["trick"].Success && !string.IsNullOrWhiteSpace(match.Groups["trick"].Value))
         {
             return false;
         }
@@ -361,9 +368,9 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
         var player = match.Groups["player"].Value.Trim();
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label, source, time, null, null, null, false, date,
-            candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
         return true;
     }
 
@@ -388,9 +395,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var mapName = candidate.Map ?? mapInput;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", "FirstRecord", time, null, null, null,
-            false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -433,9 +441,10 @@ public class ExtractWrHistoryFromChatJob : IJob
 
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), "MapRecord", time, null,
-            split, improvement, false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            split, improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -475,9 +484,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var mapName = candidate.Map ?? mapInput;
         var source = "Bonus " + match.Groups["index"].Value;
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
-            improvement, false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -503,9 +513,9 @@ public class ExtractWrHistoryFromChatJob : IJob
         var source = "Bonus " + match.Groups["index"].Value + " First";
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, false, date,
-            candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
         return true;
     }
 
@@ -545,9 +555,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var mapName = candidate.Map ?? mapInput;
         var source = "Course " + match.Groups["index"].Value;
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
-            improvement, false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -573,9 +584,9 @@ public class ExtractWrHistoryFromChatJob : IJob
         var source = "Course " + match.Groups["index"].Value + " First";
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, false, date,
-            candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
         return true;
     }
 
@@ -601,9 +612,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var mapName = candidate.Map ?? mapInput;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", segment + " First", time, null, null, null,
-            false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -643,9 +655,10 @@ public class ExtractWrHistoryFromChatJob : IJob
         var segment = "C" + match.Groups["index"].Value + " - " + match.Groups["name"].Value.Trim();
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), segment, time, null, split,
-            improvement, false, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
+            resolved.SteamCandidates);
         return true;
     }
 
@@ -686,9 +699,10 @@ public class ExtractWrHistoryFromChatJob : IJob
 
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", "MapRun", recordTime,
-            runTime, split, improvement, inferred, date, candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            runTime, split, improvement, inferred, date, candidate.DemoId, resolved.Identity?.SteamId64,
+            resolved.Identity?.SteamId, resolved.SteamCandidates);
         return true;
     }
 
@@ -731,35 +745,43 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
-        var identity = ResolveUserIdentity(candidate, player, demoUsers);
+        var resolved = ResolveUserIdentity(candidate, player, demoUsers);
         entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, true, date,
-            candidate.DemoId, identity?.SteamId64, identity?.SteamId);
+            candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates);
         return true;
     }
 
-    private static UserIdentity? ResolveUserIdentity(ChatCandidate candidate, string player,
+    private static ResolvedIdentity ResolveUserIdentity(ChatCandidate candidate, string player,
         IReadOnlyDictionary<ulong, DemoUsers> demoUsers)
     {
         if (!demoUsers.TryGetValue(candidate.DemoId, out var users))
         {
-            return null;
+            return new ResolvedIdentity(null, null);
         }
 
         if (candidate.FromUserId.HasValue
             && users.ByUserId.TryGetValue(candidate.FromUserId.Value, out var byUserId))
         {
-            return byUserId;
+            return new ResolvedIdentity(byUserId, null);
         }
 
         if (string.IsNullOrWhiteSpace(player))
         {
-            return null;
+            return new ResolvedIdentity(null, null);
         }
 
         var normalized = player.Trim();
-        if (users.ByName.TryGetValue(normalized, out var byName))
+        if (users.ByName.TryGetValue(normalized, out var byName) && byName.Count > 0)
         {
-            return byName;
+            if (byName.Count == 1)
+            {
+                return new ResolvedIdentity(byName[0], null);
+            }
+
+            var candidates = BuildCandidates(normalized, byName)
+                .Distinct(UserIdentityCandidateComparer.Instance)
+                .ToList();
+            return new ResolvedIdentity(null, SerializeSteamCandidates(candidates));
         }
 
         if (normalized.EndsWith("...", StringComparison.Ordinal) && normalized.Length > 3)
@@ -768,20 +790,81 @@ public class ExtractWrHistoryFromChatJob : IJob
             if (prefix.Length > 0)
             {
                 var matches = users.ByName
-                    .Where(entry => entry.Value != null
-                                    && entry.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    .Select(entry => entry.Value)
-                    .Distinct()
+                    .Where(entry => entry.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(entry => BuildCandidates(entry.Key, entry.Value))
+                    .Distinct(UserIdentityCandidateComparer.Instance)
                     .ToList();
 
                 if (matches.Count == 1)
                 {
-                    return matches[0];
+                    var match = matches[0];
+                    return new ResolvedIdentity(new UserIdentity(match.SteamId64, match.SteamId), null);
+                }
+
+                if (matches.Count > 1)
+                {
+                    return new ResolvedIdentity(null, SerializeSteamCandidates(matches));
                 }
             }
         }
 
-        return null;
+        return new ResolvedIdentity(null, null);
+    }
+
+    private static IEnumerable<UserIdentityCandidate> BuildCandidates(string name, IEnumerable<UserIdentity> identities)
+    {
+        foreach (var identity in identities)
+        {
+            yield return new UserIdentityCandidate(name, identity.SteamId64, identity.SteamId);
+        }
+    }
+
+    private static string? SerializeSteamCandidates(IReadOnlyList<UserIdentityCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var serialized = new List<string>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            var name = SanitizeCandidateToken(candidate.Name);
+            var steamId64 = candidate.SteamId64?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            var steamId = SanitizeCandidateToken(candidate.SteamId ?? string.Empty);
+            serialized.Add($"{name}|{steamId64}|{steamId}");
+        }
+
+        return string.Join(';', serialized);
+    }
+
+    private static string SanitizeCandidateToken(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Replace(',', ' ')
+            .Replace('|', ' ')
+            .Replace(';', ' ')
+            .Trim();
+    }
+
+    private static bool IsSameIdentity(UserIdentity left, UserIdentity right)
+    {
+        if (left.SteamId64.HasValue && right.SteamId64.HasValue)
+        {
+            return left.SteamId64.Value == right.SteamId64.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(left.SteamId) && !string.IsNullOrWhiteSpace(right.SteamId))
+        {
+            return string.Equals(left.SteamId, right.SteamId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return left.SteamId64 == right.SteamId64
+               && string.Equals(left.SteamId, right.SteamId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsMapMatch(string mapName, string mapInput)
@@ -790,7 +873,7 @@ public class ExtractWrHistoryFromChatJob : IJob
                || mapName.StartsWith(mapInput + "_", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsSubRecordSource(string source)
+    internal static bool IsSubRecordSource(string source)
     {
         if (string.IsNullOrWhiteSpace(source))
         {
@@ -801,6 +884,32 @@ public class ExtractWrHistoryFromChatJob : IJob
                || source.StartsWith("Course", StringComparison.OrdinalIgnoreCase)
                || source.StartsWith("C", StringComparison.OrdinalIgnoreCase) && source.Length > 1
                || source.StartsWith("Ranked", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetHistoryBucket(WrHistoryEntry entry)
+    {
+        var source = entry.Source?.Trim();
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return "Map";
+        }
+
+        if (source.StartsWith("Ranked", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Map";
+        }
+
+        if (!IsSubRecordSource(source))
+        {
+            return "Map";
+        }
+
+        if (source.EndsWith(" First", StringComparison.OrdinalIgnoreCase))
+        {
+            source = source.Substring(0, source.Length - " First".Length).TrimEnd();
+        }
+
+        return source;
     }
 
     private static bool GetIncludeSubRecords()
@@ -898,12 +1007,12 @@ public class ExtractWrHistoryFromChatJob : IJob
         recordTime = string.Empty;
         inferred = false;
 
-        if (!TryParseTimeSeconds(runTime, out var runSeconds))
+        if (!TryParseTimeCentiseconds(runTime, out var runCentiseconds))
         {
             return false;
         }
 
-        if (!TryParseSignedTimeSeconds(splitRaw, out var splitSeconds, out var sign))
+        if (!TryParseSignedTimeCentiseconds(splitRaw, out var splitCentiseconds, out var sign))
         {
             return false;
         }
@@ -915,18 +1024,18 @@ public class ExtractWrHistoryFromChatJob : IJob
 
         if (sign < 0)
         {
-            recordTime = FormatTime(runSeconds);
+            recordTime = FormatTimeFromCentiseconds(runCentiseconds);
             inferred = false;
             return true;
         }
 
-        var inferredSeconds = runSeconds - splitSeconds;
-        if (inferredSeconds <= 0)
+        var inferredCentiseconds = runCentiseconds - splitCentiseconds;
+        if (inferredCentiseconds <= 0)
         {
             return false;
         }
 
-        recordTime = FormatTime(inferredSeconds);
+        recordTime = FormatTimeFromCentiseconds(inferredCentiseconds);
         inferred = true;
         return true;
     }
@@ -981,6 +1090,79 @@ public class ExtractWrHistoryFromChatJob : IJob
         return true;
     }
 
+    private static bool TryParseTimeCentiseconds(string value, out long centiseconds)
+    {
+        centiseconds = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var parts = value.Split(':');
+        if (parts.Length is < 2 or > 3)
+        {
+            return false;
+        }
+
+        if (!TryParseSecondsCentiseconds(parts[^1], out var secondsPart, out var fractionPart))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(parts[^2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes))
+        {
+            return false;
+        }
+
+        var hours = 0;
+        if (parts.Length == 3
+            && !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out hours))
+        {
+            return false;
+        }
+
+        centiseconds = ((long)hours * 3600 + minutes * 60 + secondsPart) * 100 + fractionPart;
+        return true;
+    }
+
+    private static bool TryParseSecondsCentiseconds(string value, out int seconds, out int fraction)
+    {
+        seconds = 0;
+        fraction = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var parts = value.Split('.');
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out seconds))
+        {
+            return false;
+        }
+
+        var fractionRaw = parts[1];
+        if (fractionRaw.Length == 1)
+        {
+            fractionRaw += "0";
+        }
+        else if (fractionRaw.Length > 2)
+        {
+            fractionRaw = fractionRaw.Substring(0, 2);
+        }
+
+        if (!int.TryParse(fractionRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out fraction))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static bool TryParseSignedTimeSeconds(string value, out double seconds, out int sign)
     {
         seconds = 0;
@@ -1015,6 +1197,35 @@ public class ExtractWrHistoryFromChatJob : IJob
         return true;
     }
 
+    private static bool TryParseSignedTimeCentiseconds(string value, out long centiseconds, out int sign)
+    {
+        centiseconds = 0;
+        sign = 0;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var raw = value;
+        if (value.StartsWith("+", StringComparison.Ordinal))
+        {
+            sign = 1;
+            raw = value.Substring(1);
+        }
+        else if (value.StartsWith("-", StringComparison.Ordinal))
+        {
+            sign = -1;
+            raw = value.Substring(1);
+        }
+
+        if (!TryParseTimeCentiseconds(raw, out centiseconds))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static string FormatTime(double seconds)
     {
         var rounded = Math.Round(seconds, 2, MidpointRounding.AwayFromZero);
@@ -1035,41 +1246,82 @@ public class ExtractWrHistoryFromChatJob : IJob
         return $"{minutes:D2}:{secondsText}";
     }
 
-    private static IEnumerable<WrHistoryEntry> BuildWrHistory(IEnumerable<WrHistoryEntry> entries, bool includeAll)
+    private static string FormatTimeFromCentiseconds(long centiseconds)
+    {
+        var rounded = centiseconds < 0 ? 0 : centiseconds;
+        var hours = (int)(rounded / 360000);
+        var minutes = (int)((rounded % 360000) / 6000);
+        var remainingCentiseconds = (int)(rounded % 6000);
+        var seconds = remainingCentiseconds / 100;
+        var fraction = remainingCentiseconds % 100;
+        var secondsText = $"{seconds:00}.{fraction:00}";
+        if (hours > 0)
+        {
+            return $"{hours}:{minutes:D2}:{secondsText}";
+        }
+
+        return $"{minutes:D2}:{secondsText}";
+    }
+
+    internal static IEnumerable<WrHistoryEntry> BuildWrHistory(IEnumerable<WrHistoryEntry> entries, bool includeAll)
     {
         var ordered = entries
             .Where(entry => entry.Date != null)
             .Select(entry => new
             {
                 Entry = entry,
-                Seconds = TryParseTimeSeconds(entry.RecordTime, out var seconds) ? seconds : (double?)null,
+                Centiseconds = TryParseTimeCentiseconds(entry.RecordTime, out var centiseconds)
+                    ? centiseconds
+                    : (long?)null,
                 Priority = GetSourcePriority(entry)
             })
-            .Where(entry => entry.Seconds != null)
+            .Where(entry => entry.Centiseconds != null)
             .OrderBy(entry => entry.Entry.Date)
-            .ThenBy(entry => entry.Seconds)
+            .ThenBy(entry => entry.Centiseconds)
             .ThenBy(entry => entry.Priority)
             .Select(entry => entry.Entry)
             .ToList();
 
-        if (includeAll)
-        {
-            return ordered;
-        }
-
         var history = new List<WrHistoryEntry>();
-        double? best = null;
+        var bestByBucket = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in ordered)
         {
-            if (!TryParseTimeSeconds(entry.RecordTime, out var seconds))
+            if (!TryParseTimeCentiseconds(entry.RecordTime, out var centiseconds))
             {
                 continue;
             }
 
-            if (best == null || seconds < best.Value - 0.0001)
+            var bucket = GetHistoryBucket(entry);
+            var hasBest = bestByBucket.TryGetValue(bucket, out var best);
+            var epsilon = entry.Inferred ? 1 : 0;
+            var improves = !hasBest || centiseconds < best - epsilon;
+
+            if (includeAll)
+            {
+                if (!entry.Inferred)
+                {
+                    history.Add(entry);
+                    if (improves)
+                    {
+                        bestByBucket[bucket] = centiseconds;
+                    }
+
+                    continue;
+                }
+
+                if (improves)
+                {
+                    history.Add(entry);
+                    bestByBucket[bucket] = centiseconds;
+                }
+
+                continue;
+            }
+
+            if (improves)
             {
                 history.Add(entry);
-                best = seconds;
+                bestByBucket[bucket] = centiseconds;
             }
         }
 
@@ -1122,7 +1374,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
         var lines = new List<string>
         {
-            "date,record_time,player,map,record_type,source,run_time,split,improvement,inferred,demo_id,steam_id64,steam_id"
+            "date,record_time,player,map,record_type,source,run_time,split,improvement,inferred,demo_id,steam_id64,steam_id,steam_candidates"
         };
 
         foreach (var entry in entries)
@@ -1142,7 +1394,8 @@ public class ExtractWrHistoryFromChatJob : IJob
                 entry.Inferred ? "true" : "false",
                 entry.DemoId?.ToString() ?? string.Empty,
                 entry.SteamId64?.ToString() ?? string.Empty,
-                entry.SteamId ?? string.Empty
+                entry.SteamId ?? string.Empty,
+                entry.SteamCandidates ?? string.Empty
             }));
         }
 
@@ -1150,7 +1403,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         return filePath;
     }
 
-    private static async Task<Dictionary<ulong, DateTime?>> LoadDemoDatesAsync(ArchiveDbContext db,
+    internal static async Task<Dictionary<ulong, DateTime?>> LoadDemoDatesAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
     {
         if (demoIds.Count == 0)
@@ -1172,7 +1425,7 @@ public class ExtractWrHistoryFromChatJob : IJob
         return demoDates.ToDictionary(x => x.Id, x => (DateTime?)ArchiveUtils.GetDateFromTimestamp(x.Date));
     }
 
-    private static async Task<Dictionary<ulong, DemoUsers>> LoadDemoUsersAsync(ArchiveDbContext db,
+    internal static async Task<Dictionary<ulong, DemoUsers>> LoadDemoUsersAsync(ArchiveDbContext db,
         IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
     {
         if (demoIds.Count == 0)
@@ -1207,13 +1460,13 @@ public class ExtractWrHistoryFromChatJob : IJob
         }
     }
 
-    private static Dictionary<ulong, DemoUsers> BuildDemoUsers(IEnumerable<StvUser> users)
+    internal static Dictionary<ulong, DemoUsers> BuildDemoUsers(IEnumerable<StvUser> users)
     {
         var demoUsers = new Dictionary<ulong, DemoUsers>();
         foreach (var group in users.GroupBy(user => user.DemoId))
         {
             var byUserId = new Dictionary<int, UserIdentity>();
-            var byName = new Dictionary<string, UserIdentity?>(StringComparer.OrdinalIgnoreCase);
+            var byName = new Dictionary<string, List<UserIdentity>>(StringComparer.OrdinalIgnoreCase);
             foreach (var user in group)
             {
                 var identity = new UserIdentity(user.SteamId64, user.SteamIdClean ?? user.SteamId);
@@ -1228,16 +1481,15 @@ public class ExtractWrHistoryFromChatJob : IJob
                     continue;
                 }
 
-                if (byName.TryGetValue(name, out var existing))
+                if (!byName.TryGetValue(name, out var identities))
                 {
-                    if (existing != null)
-                    {
-                        byName[name] = null;
-                    }
+                    identities = new List<UserIdentity>();
+                    byName[name] = identities;
                 }
-                else
+
+                if (!identities.Any(existing => IsSameIdentity(existing, identity)))
                 {
-                    byName[name] = identity;
+                    identities.Add(identity);
                 }
             }
 
@@ -1250,6 +1502,38 @@ public class ExtractWrHistoryFromChatJob : IJob
 
 public record WrHistoryEntry(string Player, string Class, string Map, string RecordType, string Source,
     string RecordTime, string? RunTime, string? Split, string? Improvement, bool Inferred, DateTime? Date = null,
-    ulong? DemoId = null, long? SteamId64 = null, string? SteamId = null);
+    ulong? DemoId = null, long? SteamId64 = null, string? SteamId = null, string? SteamCandidates = null);
 
 public record UserIdentity(long? SteamId64, string? SteamId);
+
+internal sealed record ResolvedIdentity(UserIdentity? Identity, string? SteamCandidates);
+
+internal sealed record UserIdentityCandidate(string Name, long? SteamId64, string? SteamId);
+
+internal sealed class UserIdentityCandidateComparer : IEqualityComparer<UserIdentityCandidate>
+{
+    public static readonly UserIdentityCandidateComparer Instance = new();
+
+    public bool Equals(UserIdentityCandidate? x, UserIdentityCandidate? y)
+    {
+        if (ReferenceEquals(x, y))
+        {
+            return true;
+        }
+
+        if (x is null || y is null)
+        {
+            return false;
+        }
+
+        return string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase)
+               && x.SteamId64 == y.SteamId64
+               && string.Equals(x.SteamId, y.SteamId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public int GetHashCode(UserIdentityCandidate obj)
+    {
+        return HashCode.Combine(obj.Name.ToUpperInvariant(), obj.SteamId64,
+            obj.SteamId?.ToUpperInvariant());
+    }
+}
