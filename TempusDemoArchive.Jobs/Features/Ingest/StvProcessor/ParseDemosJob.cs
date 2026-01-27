@@ -293,7 +293,7 @@ public class ParseDemosJob : IJob
             DownloadSize = downloadSizeBytes ?? 0,
             ExtractedFileSize = new FileInfo(filePath).Length,
             ParsedAtUtc = DateTime.UtcNow,
-            ParserVersion = Environment.GetEnvironmentVariable("TF_DEMO_PARSER_VERSION"),
+            ParserVersion = EnvVar.GetString("TF_DEMO_PARSER_VERSION"),
 
             IntervalPerTick = output.IntervalPerTick,
             StartTick = output.StartTick,
