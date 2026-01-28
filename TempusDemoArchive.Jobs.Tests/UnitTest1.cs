@@ -45,8 +45,8 @@ public class WrLookupParsingTests
         entry.Should().NotBeNull();
 
         entry!.IsLookup.Should().BeTrue();
-        entry.Source.Should().Be("Bonus 1");
-        entry.RecordType.Should().Be("WR");
+        entry.Source.Should().Be($"{WrHistoryConstants.SegmentPrefix.Bonus} 1");
+        entry.RecordType.Should().Be(WrHistoryConstants.RecordType.Wr);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class WrLookupParsingTests
 
         entry!.IsLookup.Should().BeTrue();
         entry.Inferred.Should().BeTrue();
-        entry.Source.Should().Be("Ranked");
-        entry.RecordType.Should().Be("WR");
+        entry.Source.Should().Be(WrHistoryConstants.Source.Ranked);
+        entry.RecordType.Should().Be(WrHistoryConstants.RecordType.Wr);
     }
 }

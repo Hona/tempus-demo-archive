@@ -65,10 +65,24 @@ TEMPUS_CRAWL_MIN_INTERVAL_MS=200
 ## Sentiment Controls
 - `TEMPUS_SENTIMENT_BUCKET=month` (month/year; default month)
 
-## WR History Controls
-- `TEMPUS_WR_INCLUDE_INFERRED=1` (include map-run inferred WR times; default 0)
-- `TEMPUS_WR_INCLUDE_ALL=1` (emit all WR announcements, not just improvements)
-- `TEMPUS_WR_INCLUDE_SUBRECORDS=1` (include bonus/course/segment/ranked entries)
+## WR History Export
+
+Jobs:
+- `wr-history` – WR history for a single map + class.
+- `wr-history-all` – full export (one CSV per map + class).
+
+Output:
+- `~/.config/TempusDemoArchive/temp/wr-history-all/`
+
+Rules (no env toggles):
+- Emits a deterministic, monotonic improvement timeline per `(map, class, segment)`.
+- Only `evidence=record` rows get a `demo_id` (record-setting demo). All other evidence has no reliable demo link.
+- Non-record evidence for the same `(segment, record_time)` is suppressed when a real record exists.
+
+CSV schema (per-row):
+- `segment`: `Map`, `Bonus N`, `Course N`, `C# - Name` (course segments)
+- `evidence`: `record` | `announcement` | `command` | `observed`
+- `evidence_source`: `map_record` | `first_record` | `zone_record` | `zone_first` | `irc` | `irc_set` | `wr_command` | `rank_command` | `wr_split`
 
 ## Map Run History Controls
 - `TEMPUS_MAPRUN_INCLUDE_WR=1` (include WR map runs; default PR-only)

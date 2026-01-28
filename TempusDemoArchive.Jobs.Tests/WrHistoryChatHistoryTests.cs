@@ -15,8 +15,8 @@ public class WrHistoryChatHistoryTests
                 Player: "jump_gaylord",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRecord",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
                 RecordTime: "00:44.02",
                 RunTime: null,
                 Split: null,
@@ -29,8 +29,8 @@ public class WrHistoryChatHistoryTests
                 Player: "prof",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRecord",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
                 RecordTime: "00:43.66",
                 RunTime: null,
                 Split: null,
@@ -54,8 +54,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Holder",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRecord",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
                 RecordTime: "00:40.00",
                 RunTime: null,
                 Split: "-00:00.10",
@@ -68,8 +68,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Runner",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRun",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRun,
                 RecordTime: "00:39.90",
                 RunTime: "00:40.00",
                 Split: "+00:00.10",
@@ -85,8 +85,8 @@ public class WrHistoryChatHistoryTests
         history.Should().HaveCount(2);
 
         var observed = history[1];
-        observed.Source.Should().Be("ObservedWR");
-        observed.Player.Should().Be("unknown");
+        observed.Source.Should().Be(WrHistoryConstants.Source.ObservedWr);
+        observed.Player.Should().Be(WrHistoryConstants.Unknown);
         observed.DemoId.Should().BeNull();
         observed.SteamId64.Should().BeNull();
         observed.SteamId.Should().BeNull();
@@ -104,8 +104,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Holder0",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRecord",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
                 RecordTime: "00:40.00",
                 RunTime: null,
                 Split: null,
@@ -118,8 +118,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Runner",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRun",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRun,
                 RecordTime: "00:39.90",
                 RunTime: "00:40.00",
                 Split: "+00:00.10",
@@ -133,8 +133,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Holder1",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "Compact",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.Compact,
                 RecordTime: "00:39.90",
                 RunTime: null,
                 Split: null,
@@ -151,7 +151,7 @@ public class WrHistoryChatHistoryTests
         history.Should().HaveCount(2);
 
         var observed = history[1];
-        observed.Source.Should().Be("ObservedWR");
+        observed.Source.Should().Be(WrHistoryConstants.Source.ObservedWr);
         observed.Player.Should().Be("Holder1");
         observed.DemoId.Should().BeNull();
         observed.SteamId64.Should().Be(456);
@@ -160,7 +160,7 @@ public class WrHistoryChatHistoryTests
     }
 
     [Fact]
-    public void BuildWrHistory_CanonicalizesLookupDemoId_WhenBetterSourceExists()
+    public void BuildWrHistory_SkipsCommandOutput_WhenRecordExists()
     {
         var entries = new List<WrHistoryEntry>
         {
@@ -168,8 +168,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Holder",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "MapRecord",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
                 RecordTime: "00:40.00",
                 RunTime: null,
                 Split: null,
@@ -183,8 +183,8 @@ public class WrHistoryChatHistoryTests
                 Player: "Holder",
                 Class: "Solly",
                 Map: "jump_example",
-                RecordType: "WR",
-                Source: "Compact",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.Compact,
                 RecordTime: "00:40.00",
                 RunTime: null,
                 Split: null,
@@ -196,10 +196,9 @@ public class WrHistoryChatHistoryTests
                 ChatIndex: 1)
         };
 
-        var history = WrHistoryChat.BuildWrHistory(entries, includeAll: true).ToList();
-        history.Should().HaveCount(2);
-
-        history.Should().NotContain(x => x.DemoId == 999);
-        history.Should().Contain(x => x.DemoId == 1);
+        var history = WrHistoryChat.BuildWrHistory(entries, includeAll: false).ToList();
+        history.Should().HaveCount(1);
+        history[0].Source.Should().Be(WrHistoryConstants.Source.MapRecord);
+        history[0].DemoId.Should().Be(1);
     }
 }

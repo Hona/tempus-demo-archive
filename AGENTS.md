@@ -74,11 +74,11 @@
 ## WR History Job
 - Job id: `wr-history` (WR-only, per map/class). CSV emitted to `~/.config/TempusDemoArchive/temp/`.
 - Deterministic formats handled: map record, first record, bonus/course record (including ~holiday tags), course segment records, compact WR lines, IRC broke/set WR, ranked-with-time (rank=1 only).
-- PRs are ignored; unlabeled map-run splits are ignored.
-- Flags:
-  - `TEMPUS_WR_INCLUDE_INFERRED=1` include map-run inferred WR times (default 0).
-  - `TEMPUS_WR_INCLUDE_ALL=1` include all WR announcements, not just improvements.
-  - `TEMPUS_WR_INCLUDE_SUBRECORDS=1` include bonus/course/segment/ranked entries.
+- PR/SR labels in record-set messages are treated as candidates; the exporter enforces monotonic improvements per segment.
+- There are no env toggles; the export rules are fixed:
+  - timeline is monotonic per `(map, class, segment)`
+  - `demo_id` is only emitted for `evidence=record` (record-setting demo)
+  - other evidence (`announcement`, `command`, `observed`) is time evidence only
 
 ## Analysis Jobs
 - `sentiment-user-timeline` writes CSV + SVG for a user.

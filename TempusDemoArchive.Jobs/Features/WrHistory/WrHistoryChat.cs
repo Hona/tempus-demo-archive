@@ -107,21 +107,12 @@ internal static class WrHistoryChat
         var split = match.Groups["split"].Success
             ? TempusTime.NormalizeSignedTime(match.Groups["split"].Value)
             : null;
-        var label = match.Groups["label"].Value;
-        if (!IsWorldRecordLabel(label, allowEmpty: true))
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = "WR";
-        }
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        var source = isSet ? "IRCSet" : "IRC";
-        return new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
+        var source = isSet ? WrHistoryConstants.Source.IrcSet : WrHistoryConstants.Source.Irc;
+        return new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            split,
             null, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
     }
@@ -155,15 +146,22 @@ internal static class WrHistoryChat
             return false;
         }
 
-        return source.StartsWith("Bonus", StringComparison.OrdinalIgnoreCase)
-               || source.StartsWith("Course", StringComparison.OrdinalIgnoreCase)
-               || (source.StartsWith("C", StringComparison.OrdinalIgnoreCase) && source.Length > 1
+        return source.StartsWith(WrHistoryConstants.SegmentPrefix.Bonus, StringComparison.OrdinalIgnoreCase)
+               || source.StartsWith(WrHistoryConstants.SegmentPrefix.Course, StringComparison.OrdinalIgnoreCase)
+               || (source.StartsWith(WrHistoryConstants.SegmentPrefix.CourseSegment, StringComparison.OrdinalIgnoreCase)
+                   && source.Length > 1
                    && char.IsDigit(source[1]))
-               || source.StartsWith("Ranked", StringComparison.OrdinalIgnoreCase);
+               || source.StartsWith(WrHistoryConstants.Source.Ranked, StringComparison.OrdinalIgnoreCase);
     }
 
     public static IEnumerable<WrHistoryEntry> BuildWrHistory(IEnumerable<WrHistoryEntry> entries, bool includeAll)
     {
+        // Build a stable, deterministic timeline:
+        // - ordering: (date, demo_id, chat_index) to avoid reordering within a single day
+        // - selection: keep only monotonic improvements per segment (Map / Bonus N / Course N / C#)
+        // - evidence preference: when we have an in-demo record message for a time, suppress other
+        //   evidence for that exact (segment,time) so the UI can link the real record-setting demo.
+
         var ordered = entries
             .Where(entry => entry.Date != null)
             .Select(entry =>
@@ -188,6 +186,26 @@ internal static class WrHistoryChat
             .ThenBy(entry => entry.Centiseconds)
             .ToList();
 
+        // Record-setting messages are the only evidence that can be reliably tied to a record demo.
+        // Other evidence (IRC, command output, inferred snapshots) can appear in arbitrary demos.
+        var recordTimesByBucket = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in ordered)
+        {
+            if (!string.Equals(GetEvidenceKind(item.Entry), WrHistoryConstants.EvidenceKind.Record,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!recordTimesByBucket.TryGetValue(item.Bucket, out var recordTimes))
+            {
+                recordTimes = new HashSet<int>();
+                recordTimesByBucket[item.Bucket] = recordTimes;
+            }
+
+            recordTimes.Add(item.Centiseconds);
+        }
+
         var history = new List<WrHistoryEntry>();
         var bestByBucket = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in ordered)
@@ -196,7 +214,17 @@ internal static class WrHistoryChat
             var centiseconds = item.Centiseconds;
             var bucket = item.Bucket;
 
+            var evidenceKind = GetEvidenceKind(entry);
+            // If a record-setting demo exists for this exact time, avoid emitting duplicate evidence rows.
+            if (!string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Record, StringComparison.OrdinalIgnoreCase)
+                && recordTimesByBucket.TryGetValue(bucket, out var recordTimes)
+                && recordTimes.Contains(centiseconds))
+            {
+                continue;
+            }
+
             var hasBest = bestByBucket.TryGetValue(bucket, out var best);
+            // If a time is inferred/low-confidence, require it to beat the previous best by >= 1 centisecond.
             var epsilon = entry.Inferred ? 1 : 0;
             var improves = !hasBest || centiseconds < best - epsilon;
 
@@ -253,7 +281,8 @@ internal static class WrHistoryChat
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(entry.Player) || string.Equals(entry.Player, "unknown", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(entry.Player)
+                || string.Equals(entry.Player, WrHistoryConstants.Unknown, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -284,12 +313,6 @@ internal static class WrHistoryChat
 
             if (!IsObservedWrSnapshot(entry))
             {
-                if (holderByKey.TryGetValue(key, out var canonical) && IsBetterHolderCandidate(canonical, entry))
-                {
-                    yield return canonical;
-                    continue;
-                }
-
                 yield return entry;
                 continue;
             }
@@ -299,7 +322,7 @@ internal static class WrHistoryChat
                 yield return entry with
                 {
                     Player = holder.Player,
-                    Source = "ObservedWR",
+                    Source = WrHistoryConstants.Source.ObservedWr,
                     RunTime = null,
                     Split = null,
                     Improvement = null,
@@ -314,8 +337,8 @@ internal static class WrHistoryChat
 
             yield return entry with
             {
-                Player = "unknown",
-                Source = "ObservedWR",
+                Player = WrHistoryConstants.Unknown,
+                Source = WrHistoryConstants.Source.ObservedWr,
                 RunTime = null,
                 Split = null,
                 Improvement = null,
@@ -335,8 +358,8 @@ internal static class WrHistoryChat
             return false;
         }
 
-        return string.Equals(entry.Source, "MapRun", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(entry.Source, "ObservedWR", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(entry.Source, WrHistoryConstants.Source.MapRun, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(entry.Source, WrHistoryConstants.Source.ObservedWr, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBetterHolderCandidate(WrHistoryEntry candidate, WrHistoryEntry existing)
@@ -572,7 +595,8 @@ internal static class WrHistoryChat
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", "FirstRecord", time, null, null, null,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr,
+            WrHistoryConstants.Source.FirstRecord, time, null, null, null,
             false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -605,21 +629,12 @@ internal static class WrHistoryChat
         var improvement = match.Groups["improvement"].Success
             ? TempusTime.NormalizeTime(match.Groups["improvement"].Value)
             : null;
-        var label = match.Groups["label"].Value;
-        if (!IsWorldRecordLabel(label, allowEmpty: true))
-        {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = "WR";
-        }
 
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), "MapRecord", time, null,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr,
+            WrHistoryConstants.Source.MapRecord, time, null,
             split, improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -648,22 +663,13 @@ internal static class WrHistoryChat
         var improvement = match.Groups["improvement"].Success
             ? TempusTime.NormalizeTime(match.Groups["improvement"].Value)
             : null;
-        var label = match.Groups["label"].Value;
-        if (!IsWorldRecordLabel(label, allowEmpty: true))
-        {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = "WR";
-        }
 
         var mapName = candidate.Map ?? mapInput;
-        var source = "Bonus " + match.Groups["index"].Value;
+        var source = WrHistoryConstants.SegmentPrefix.Bonus + " " + match.Groups["index"].Value;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            split,
             improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -689,11 +695,13 @@ internal static class WrHistoryChat
         }
 
         var mapName = candidate.Map ?? mapInput;
-        var source = "Bonus " + match.Groups["index"].Value + " First";
+        var source = WrHistoryConstants.SegmentPrefix.Bonus + " " + match.Groups["index"].Value
+                     + WrHistoryConstants.SegmentPrefix.FirstSuffix;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, false, date,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            null, null, false, date,
             candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates,
             ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -722,22 +730,13 @@ internal static class WrHistoryChat
         var improvement = match.Groups["improvement"].Success
             ? TempusTime.NormalizeTime(match.Groups["improvement"].Value)
             : null;
-        var label = match.Groups["label"].Value;
-        if (!IsWorldRecordLabel(label, allowEmpty: true))
-        {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = "WR";
-        }
 
         var mapName = candidate.Map ?? mapInput;
-        var source = "Course " + match.Groups["index"].Value;
+        var source = WrHistoryConstants.SegmentPrefix.Course + " " + match.Groups["index"].Value;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), source, time, null, split,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            split,
             improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -763,11 +762,13 @@ internal static class WrHistoryChat
         }
 
         var mapName = candidate.Map ?? mapInput;
-        var source = "Course " + match.Groups["index"].Value + " First";
+        var source = WrHistoryConstants.SegmentPrefix.Course + " " + match.Groups["index"].Value
+                     + WrHistoryConstants.SegmentPrefix.FirstSuffix;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, false, date,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            null, null, false, date,
             candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates,
             ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -792,12 +793,14 @@ internal static class WrHistoryChat
             return false;
         }
 
-        var segment = "C" + match.Groups["index"].Value + " - " + match.Groups["name"].Value.Trim();
+        var segment = WrHistoryConstants.SegmentPrefix.CourseSegment + match.Groups["index"].Value + " - "
+                      + match.Groups["name"].Value.Trim();
         var mapName = candidate.Map ?? mapInput;
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", segment + " First", time, null, null, null,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr,
+            segment + WrHistoryConstants.SegmentPrefix.FirstSuffix, time, null, null, null,
             false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -826,22 +829,14 @@ internal static class WrHistoryChat
         var improvement = match.Groups["improvement"].Success
             ? TempusTime.NormalizeTime(match.Groups["improvement"].Value)
             : null;
-        var label = match.Groups["label"].Value;
-        if (!IsWorldRecordLabel(label, allowEmpty: true))
-        {
-            return false;
-        }
 
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            label = "WR";
-        }
-
-        var segment = "C" + match.Groups["index"].Value + " - " + match.Groups["name"].Value.Trim();
+        var segment = WrHistoryConstants.SegmentPrefix.CourseSegment + match.Groups["index"].Value + " - "
+                      + match.Groups["name"].Value.Trim();
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, label.ToUpperInvariant(), segment, time, null, split,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, segment, time, null,
+            split,
             improvement, false, date, candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId,
             resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -877,6 +872,13 @@ internal static class WrHistoryChat
             return false;
         }
 
+        if (inferred)
+        {
+            // "map run (WR +00:xx)" indicates the runner is behind the current WR.
+            // It is not a record-set event and the WR demo is not the current demo.
+            return false;
+        }
+
         if (!IsValidRecordTime(recordTime))
         {
             return false;
@@ -885,7 +887,8 @@ internal static class WrHistoryChat
         var mapName = candidate.Map ?? mapInput;
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", "MapRun", recordTime,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr,
+            WrHistoryConstants.Source.MapRun, recordTime,
             runTime, split, improvement, inferred, date, candidate.DemoId, resolved.Identity?.SteamId64,
             resolved.Identity?.SteamId, resolved.SteamCandidates, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -919,7 +922,7 @@ internal static class WrHistoryChat
         var mapName = match.Groups["map"].Value;
         var segment = match.Groups["segment"].Value;
         var index = match.Groups["index"].Value;
-        var source = "Ranked";
+        var source = WrHistoryConstants.Source.Ranked;
         if (!string.IsNullOrWhiteSpace(segment))
         {
             source = segment + (string.IsNullOrWhiteSpace(index) ? string.Empty : " " + index);
@@ -932,7 +935,8 @@ internal static class WrHistoryChat
 
         demoDates.TryGetValue(candidate.DemoId, out var date);
         var resolved = ResolveUserIdentity(candidate, player, demoUsers);
-        entry = new WrHistoryEntry(player, detectedClass, mapName, "WR", source, time, null, null, null, true, date,
+        entry = new WrHistoryEntry(player, detectedClass, mapName, WrHistoryConstants.RecordType.Wr, source, time, null,
+            null, null, true, date,
             candidate.DemoId, resolved.Identity?.SteamId64, resolved.Identity?.SteamId, resolved.SteamCandidates,
             IsLookup: true, ChatIndex: candidate.ChatIndex, ChatTick: candidate.Tick);
         return true;
@@ -1005,22 +1009,23 @@ internal static class WrHistoryChat
         var source = entry.Source?.Trim();
         if (string.IsNullOrWhiteSpace(source))
         {
-            return "Map";
+            return WrHistoryConstants.Segment.Map;
         }
 
-        if (source.StartsWith("Ranked", StringComparison.OrdinalIgnoreCase))
+        if (source.StartsWith(WrHistoryConstants.Source.Ranked, StringComparison.OrdinalIgnoreCase))
         {
-            return "Map";
+            return WrHistoryConstants.Segment.Map;
         }
 
         if (!IsSubRecordSource(source))
         {
-            return "Map";
+            return WrHistoryConstants.Segment.Map;
         }
 
-        if (source.EndsWith(" First", StringComparison.OrdinalIgnoreCase))
+        if (source.EndsWith(WrHistoryConstants.SegmentPrefix.FirstSuffix, StringComparison.OrdinalIgnoreCase))
         {
-            source = source.Substring(0, source.Length - " First".Length).TrimEnd();
+            source = source.Substring(0, source.Length - WrHistoryConstants.SegmentPrefix.FirstSuffix.Length)
+                .TrimEnd();
         }
 
         return source;
@@ -1028,69 +1033,69 @@ internal static class WrHistoryChat
 
     internal static string GetEvidenceKind(WrHistoryEntry entry)
     {
-        if (string.Equals(entry.Source, "ObservedWR", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.ObservedWr, StringComparison.OrdinalIgnoreCase))
         {
-            return "observed";
+            return WrHistoryConstants.EvidenceKind.Observed;
         }
 
         if (entry.IsLookup)
         {
-            return "command";
+            return WrHistoryConstants.EvidenceKind.Command;
         }
 
         if (!string.IsNullOrWhiteSpace(entry.Source)
-            && entry.Source.StartsWith("IRC", StringComparison.OrdinalIgnoreCase))
+            && entry.Source.StartsWith(WrHistoryConstants.Source.Irc, StringComparison.OrdinalIgnoreCase))
         {
-            return "announcement";
+            return WrHistoryConstants.EvidenceKind.Announcement;
         }
 
-        return "record";
+        return WrHistoryConstants.EvidenceKind.Record;
     }
 
     internal static string GetEvidenceSource(WrHistoryEntry entry)
     {
-        if (string.Equals(entry.Source, "ObservedWR", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.ObservedWr, StringComparison.OrdinalIgnoreCase))
         {
-            return "wr_split";
+            return WrHistoryConstants.EvidenceSource.WrSplit;
         }
 
         if (entry.IsLookup)
         {
-            return entry.Inferred ? "rank_command" : "wr_command";
+            return entry.Inferred ? WrHistoryConstants.EvidenceSource.RankCommand : WrHistoryConstants.EvidenceSource.WrCommand;
         }
 
         if (!string.IsNullOrWhiteSpace(entry.Source)
-            && entry.Source.StartsWith("IRC", StringComparison.OrdinalIgnoreCase))
+            && entry.Source.StartsWith(WrHistoryConstants.Source.Irc, StringComparison.OrdinalIgnoreCase))
         {
-            return string.Equals(entry.Source, "IRCSet", StringComparison.OrdinalIgnoreCase)
-                ? "irc_set"
-                : "irc";
+            return string.Equals(entry.Source, WrHistoryConstants.Source.IrcSet, StringComparison.OrdinalIgnoreCase)
+                ? WrHistoryConstants.EvidenceSource.IrcSet
+                : WrHistoryConstants.EvidenceSource.Irc;
         }
 
-        if (string.Equals(entry.Source, "MapRecord", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.MapRecord, StringComparison.OrdinalIgnoreCase))
         {
-            return "map_record";
+            return WrHistoryConstants.EvidenceSource.MapRecord;
         }
 
-        if (string.Equals(entry.Source, "FirstRecord", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.FirstRecord, StringComparison.OrdinalIgnoreCase))
         {
-            return "first_record";
+            return WrHistoryConstants.EvidenceSource.FirstRecord;
         }
 
-        if (string.Equals(entry.Source, "MapRun", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.MapRun, StringComparison.OrdinalIgnoreCase))
         {
-            return "map_run";
+            return WrHistoryConstants.EvidenceSource.MapRun;
         }
 
         var segment = GetSegment(entry);
-        if (!string.Equals(segment, "Map", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(segment, WrHistoryConstants.Segment.Map, StringComparison.OrdinalIgnoreCase))
         {
-            return entry.Source.EndsWith(" First", StringComparison.OrdinalIgnoreCase)
-                ? "zone_first"
-                : "zone_record";
+            return entry.Source.EndsWith(WrHistoryConstants.SegmentPrefix.FirstSuffix, StringComparison.OrdinalIgnoreCase)
+                ? WrHistoryConstants.EvidenceSource.ZoneFirst
+                : WrHistoryConstants.EvidenceSource.ZoneRecord;
         }
 
-        return "unknown";
+        return WrHistoryConstants.EvidenceSource.Unknown;
     }
 
     internal static bool ShouldIncludeDemoLink(WrHistoryEntry entry)
@@ -1100,7 +1105,8 @@ internal static class WrHistoryChat
             return false;
         }
 
-        return string.Equals(GetEvidenceKind(entry), "record", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(GetEvidenceKind(entry), WrHistoryConstants.EvidenceKind.Record,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static int GetSourcePriority(WrHistoryEntry entry)
@@ -1110,32 +1116,32 @@ internal static class WrHistoryChat
             return 100;
         }
 
-        if (string.Equals(entry.Source, "MapRecord", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.MapRecord, StringComparison.OrdinalIgnoreCase))
         {
             return 1;
         }
 
-        if (string.Equals(entry.Source, "FirstRecord", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.FirstRecord, StringComparison.OrdinalIgnoreCase))
         {
             return 2;
         }
 
-        if (string.Equals(entry.Source, "Compact", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.Compact, StringComparison.OrdinalIgnoreCase))
         {
             return 3;
         }
 
-        if (entry.Source.StartsWith("IRC", StringComparison.OrdinalIgnoreCase))
+        if (entry.Source.StartsWith(WrHistoryConstants.Source.Irc, StringComparison.OrdinalIgnoreCase))
         {
             return 4;
         }
 
-        if (string.Equals(entry.Source, "MapRun", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.MapRun, StringComparison.OrdinalIgnoreCase))
         {
             return 5;
         }
 
-        if (string.Equals(entry.Source, "Ranked", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(entry.Source, WrHistoryConstants.Source.Ranked, StringComparison.OrdinalIgnoreCase))
         {
             return 6;
         }
@@ -1150,7 +1156,8 @@ internal static class WrHistoryChat
             return allowEmpty;
         }
 
-        return string.Equals(label, "WR", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(label, WrHistoryConstants.Label.Wr, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(label, WrHistoryConstants.Label.Sr, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsValidRecordTime(string value)
@@ -1160,7 +1167,7 @@ internal static class WrHistoryChat
 
     private static string SplitMapSource(string rawMap, out string source)
     {
-        source = "Compact";
+        source = WrHistoryConstants.Source.Compact;
         if (string.IsNullOrWhiteSpace(rawMap))
         {
             return rawMap;

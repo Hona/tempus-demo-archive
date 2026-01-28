@@ -5,7 +5,7 @@ namespace TempusDemoArchive.Jobs;
 internal static class WrChatRegexes
 {
     public static readonly Regex MapRecord = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) beat the map record: (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) beat the map record: (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex MapRecordNoSplit = new(
@@ -17,15 +17,15 @@ internal static class WrChatRegexes
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex BonusRecord = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Bonus\s*#?(?<index>\d+) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Bonus\s*#?(?<index>\d+) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex CourseRecord = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Course\s*#?(?<index>\d+) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*Course\s*#?(?<index>\d+) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex CourseSegmentRecord = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*C(?<index>\d+)\s*-\s*(?<name>.+?) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) broke\s+(?:~[^~]+~\s*)*C(?<index>\d+)\s*-\s*(?<name>.+?) (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex SetBonus = new(
@@ -45,7 +45,7 @@ internal static class WrChatRegexes
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex IrcWr = new(
-        $@"^:: \((?<class>[^)]+)\) (?<player>.+?) broke (?<map>[^ ]+) WR: (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)\!?$",
+        $@"^:: \((?<class>[^)]+)\) (?<player>.+?) broke (?<map>[^ ]+) WR: (?<time>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex IrcSet = new(
@@ -53,7 +53,7 @@ internal static class WrChatRegexes
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex CompactRecord = new(
-        $@"^Tempus \| \((?<class>[^)]+?) (?<label>WR|PR)\) (?<map>.+?) :: (?<time>{TempusTime.TimePattern}) :: (?<player>.+)$",
+        $@"^Tempus \| \((?<class>[^)]+?) (?<label>WR|SR|PR)\) (?<map>.+?) :: (?<time>{TempusTime.TimePattern}) :: (?<player>.+)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex CompactMapSource = new(
@@ -61,6 +61,6 @@ internal static class WrChatRegexes
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     public static readonly Regex MapRun = new(
-        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TempusTime.TimePattern}) \((?:(?<label>WR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
+        $@"^Tempus \| \((?<class>[^)]+)\) (?<player>.*?) map run (?<run>{TempusTime.TimePattern}) \((?:(?<label>WR|SR|PR)\s*)?(?<split>{TempusTime.SignedTimePattern})\)(?: \| (?<improvement>{TempusTime.TimePattern}) improvement!?)?\!?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 }

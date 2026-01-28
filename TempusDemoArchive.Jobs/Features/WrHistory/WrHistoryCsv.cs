@@ -4,21 +4,21 @@ internal static class WrHistoryCsv
 {
     private static readonly string[] Header =
     {
-        "date",
-        "record_time",
-        "player",
-        "map",
-        "record_type",
-        "segment",
-        "evidence",
-        "evidence_source",
-        "run_time",
-        "split",
-        "improvement",
-        "demo_id",
-        "steam_id64",
-        "steam_id",
-        "steam_candidates"
+        WrHistoryConstants.CsvColumn.Date,
+        WrHistoryConstants.CsvColumn.RecordTime,
+        WrHistoryConstants.CsvColumn.Player,
+        WrHistoryConstants.CsvColumn.Map,
+        WrHistoryConstants.CsvColumn.RecordType,
+        WrHistoryConstants.CsvColumn.Segment,
+        WrHistoryConstants.CsvColumn.Evidence,
+        WrHistoryConstants.CsvColumn.EvidenceSource,
+        WrHistoryConstants.CsvColumn.RunTime,
+        WrHistoryConstants.CsvColumn.Split,
+        WrHistoryConstants.CsvColumn.Improvement,
+        WrHistoryConstants.CsvColumn.DemoId,
+        WrHistoryConstants.CsvColumn.SteamId64,
+        WrHistoryConstants.CsvColumn.SteamId,
+        WrHistoryConstants.CsvColumn.SteamCandidates
     };
 
     public static string Write(string outputRoot, string map, string @class, IReadOnlyList<WrHistoryEntry> entries,
@@ -41,6 +41,7 @@ internal static class WrHistoryCsv
                 entry.RunTime,
                 entry.Split,
                 entry.Improvement,
+                // Only record-setting messages can be reliably linked to the record demo.
                 WrHistoryChat.ShouldIncludeDemoLink(entry) ? entry.DemoId?.ToString() : null,
                 entry.SteamId64?.ToString(),
                 entry.SteamId,
