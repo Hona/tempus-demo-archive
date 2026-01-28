@@ -51,20 +51,6 @@ public class WrHistoryChatHistoryTests
         var entries = new List<WrHistoryEntry>
         {
             new(
-                Player: "Holder",
-                Class: "Solly",
-                Map: "jump_example",
-                RecordType: WrHistoryConstants.RecordType.Wr,
-                Source: WrHistoryConstants.Source.MapRecord,
-                RecordTime: "00:40.00",
-                RunTime: null,
-                Split: "-00:00.10",
-                Improvement: null,
-                Inferred: false,
-                Date: new DateTime(2024, 1, 1),
-                DemoId: 1,
-                ChatIndex: 1),
-            new(
                 Player: "Runner",
                 Class: "Solly",
                 Map: "jump_example",
@@ -82,9 +68,9 @@ public class WrHistoryChatHistoryTests
         };
 
         var history = WrHistoryChat.BuildWrHistory(entries, includeAll: false).ToList();
-        history.Should().HaveCount(2);
+        history.Should().HaveCount(1);
 
-        var observed = history[1];
+        var observed = history[0];
         observed.Source.Should().Be(WrHistoryConstants.Source.ObservedWr);
         observed.Player.Should().Be(WrHistoryConstants.Unknown);
         observed.DemoId.Should().BeNull();
@@ -100,20 +86,6 @@ public class WrHistoryChatHistoryTests
     {
         var entries = new List<WrHistoryEntry>
         {
-            new(
-                Player: "Holder0",
-                Class: "Solly",
-                Map: "jump_example",
-                RecordType: WrHistoryConstants.RecordType.Wr,
-                Source: WrHistoryConstants.Source.MapRecord,
-                RecordTime: "00:40.00",
-                RunTime: null,
-                Split: null,
-                Improvement: null,
-                Inferred: false,
-                Date: new DateTime(2024, 1, 1),
-                DemoId: 1,
-                ChatIndex: 1),
             new(
                 Player: "Runner",
                 Class: "Solly",
@@ -148,9 +120,9 @@ public class WrHistoryChatHistoryTests
         };
 
         var history = WrHistoryChat.BuildWrHistory(entries, includeAll: false).ToList();
-        history.Should().HaveCount(2);
+        history.Should().HaveCount(1);
 
-        var observed = history[1];
+        var observed = history[0];
         observed.Source.Should().Be(WrHistoryConstants.Source.ObservedWr);
         observed.Player.Should().Be("Holder1");
         observed.DemoId.Should().BeNull();
@@ -200,5 +172,58 @@ public class WrHistoryChatHistoryTests
         history.Should().HaveCount(1);
         history[0].Source.Should().Be(WrHistoryConstants.Source.MapRecord);
         history[0].DemoId.Should().Be(1);
+    }
+
+    [Fact]
+    public void BuildWrHistory_IncludesWipe_WhenWrGetsSlower()
+    {
+        var entries = new List<WrHistoryEntry>
+        {
+            new(
+                Player: "sigma weed22",
+                Class: "Solly",
+                Map: "jump_example",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.IrcSet,
+                RecordTime: "00:10.00",
+                RunTime: null,
+                Split: null,
+                Improvement: null,
+                Inferred: false,
+                Date: new DateTime(2024, 1, 1),
+                DemoId: 1,
+                ChatIndex: 1),
+            new(
+                Player: "Holder",
+                Class: "Solly",
+                Map: "jump_example",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
+                RecordTime: "00:20.00",
+                RunTime: null,
+                Split: null,
+                Improvement: null,
+                Inferred: false,
+                Date: new DateTime(2024, 1, 2),
+                DemoId: 2,
+                ChatIndex: 1),
+            new(
+                Player: "Holder",
+                Class: "Solly",
+                Map: "jump_example",
+                RecordType: WrHistoryConstants.RecordType.Wr,
+                Source: WrHistoryConstants.Source.MapRecord,
+                RecordTime: "00:15.00",
+                RunTime: null,
+                Split: null,
+                Improvement: null,
+                Inferred: false,
+                Date: new DateTime(2024, 1, 3),
+                DemoId: 3,
+                ChatIndex: 1)
+        };
+
+        var history = WrHistoryChat.BuildWrHistory(entries, includeAll: false).ToList();
+        history.Select(x => x.RecordTime).Should().Equal("00:10.00", "00:20.00", "00:15.00");
     }
 }

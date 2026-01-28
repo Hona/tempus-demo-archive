@@ -156,9 +156,11 @@ internal static class WrHistoryChat
 
     public static IEnumerable<WrHistoryEntry> BuildWrHistory(IEnumerable<WrHistoryEntry> entries, bool includeAll)
     {
-        // Build a stable, deterministic timeline:
+        // Build a stable, deterministic timeline per segment:
         // - ordering: (date, demo_id, chat_index) to avoid reordering within a single day
-        // - selection: keep only monotonic improvements per segment (Map / Bonus N / Course N / C#)
+        // - selection: keep only meaningful state changes per segment:
+        //   - improvements (faster times)
+        //   - wipes (a slower WR after a faster one), which likely indicates records were wiped
         // - evidence preference: when we have an in-demo record message for a time, suppress other
         //   evidence for that exact (segment,time) so the UI can link the real record-setting demo.
 
@@ -207,7 +209,7 @@ internal static class WrHistoryChat
         }
 
         var history = new List<WrHistoryEntry>();
-        var bestByBucket = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var currentByBucket = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in ordered)
         {
             var entry = item.Entry;
@@ -223,44 +225,199 @@ internal static class WrHistoryChat
                 continue;
             }
 
-            var hasBest = bestByBucket.TryGetValue(bucket, out var best);
-            // If a time is inferred/low-confidence, require it to beat the previous best by >= 1 centisecond.
+            var hasCurrent = currentByBucket.TryGetValue(bucket, out var current);
+            // If a time is inferred/low-confidence, require it to beat the previous accepted time by >= 1 centisecond.
             var epsilon = entry.Inferred ? 1 : 0;
-            var improves = !hasBest || centiseconds < best - epsilon;
+            var improves = !hasCurrent || centiseconds < current - epsilon;
+
+            // Wipes are upward jumps in the WR time (slower after faster). These can happen when records are wiped.
+            // Only allow a wipe when the evidence is reputable.
+            var isWipe = hasCurrent
+                         && centiseconds > current
+                         && CanTriggerWipe(entry, evidenceKind);
 
             if (includeAll)
             {
                 if (!entry.Inferred)
                 {
                     history.Add(entry);
-                    if (improves)
+                    if (improves || isWipe)
                     {
-                        bestByBucket[bucket] = centiseconds;
+                        currentByBucket[bucket] = centiseconds;
                     }
 
                     continue;
                 }
 
-                if (improves)
+                if (improves || isWipe)
                 {
                     history.Add(entry);
-                    bestByBucket[bucket] = centiseconds;
+                    currentByBucket[bucket] = centiseconds;
                 }
 
                 continue;
             }
 
-            if (improves)
+            if (improves || isWipe)
             {
                 history.Add(entry);
-                bestByBucket[bucket] = centiseconds;
+                currentByBucket[bucket] = centiseconds;
             }
         }
 
-        return FixObservedWrAttribution(history, ordered);
+        var attributed = FixObservedWrAttribution(history, ordered).ToList();
+        return DeduplicateHistory(attributed);
     }
 
     private readonly record struct OrderedWrEntry(WrHistoryEntry Entry, int Centiseconds, string Bucket, int Priority);
+
+    private readonly record struct HistoryDedupeKey(
+        string Map,
+        string Class,
+        string RecordType,
+        string Bucket,
+        DateTime Date,
+        int Centiseconds);
+
+    private readonly record struct HistoryDedupeValue(int FirstIndex, WrHistoryEntry Entry);
+
+    private static IReadOnlyList<WrHistoryEntry> DeduplicateHistory(IReadOnlyList<WrHistoryEntry> history)
+    {
+        // The same server/bot message can be present in many demos on the same day.
+        // Collapse duplicates at the (day,time,segment) level while keeping the best identity/demo metadata.
+        var byKey = new Dictionary<HistoryDedupeKey, HistoryDedupeValue>();
+
+        for (var i = 0; i < history.Count; i++)
+        {
+            var entry = history[i];
+            if (entry.Date == null)
+            {
+                continue;
+            }
+
+            if (!TempusTime.TryParseTimeCentiseconds(entry.RecordTime, out var centiseconds))
+            {
+                continue;
+            }
+
+            var key = new HistoryDedupeKey(
+                Map: entry.Map,
+                Class: entry.Class,
+                RecordType: entry.RecordType,
+                Bucket: GetSegment(entry),
+                Date: entry.Date.Value.Date,
+                Centiseconds: centiseconds);
+
+            if (!byKey.TryGetValue(key, out var existing))
+            {
+                byKey[key] = new HistoryDedupeValue(i, entry);
+                continue;
+            }
+
+            if (IsBetterDedupeCandidate(entry, existing.Entry))
+            {
+                byKey[key] = existing with { Entry = entry };
+            }
+        }
+
+        return byKey.Values
+            .OrderBy(x => x.FirstIndex)
+            .Select(x => x.Entry)
+            .ToList();
+    }
+
+    private static bool IsBetterDedupeCandidate(WrHistoryEntry candidate, WrHistoryEntry existing)
+    {
+        var candidateEvidenceRank = GetDedupeEvidenceRank(GetEvidenceKind(candidate));
+        var existingEvidenceRank = GetDedupeEvidenceRank(GetEvidenceKind(existing));
+        if (candidateEvidenceRank != existingEvidenceRank)
+        {
+            return candidateEvidenceRank < existingEvidenceRank;
+        }
+
+        var candidateUnknown = string.IsNullOrWhiteSpace(candidate.Player)
+                               || string.Equals(candidate.Player, WrHistoryConstants.Unknown,
+                                   StringComparison.OrdinalIgnoreCase);
+        var existingUnknown = string.IsNullOrWhiteSpace(existing.Player)
+                              || string.Equals(existing.Player, WrHistoryConstants.Unknown,
+                                  StringComparison.OrdinalIgnoreCase);
+        if (candidateUnknown != existingUnknown)
+        {
+            return !candidateUnknown;
+        }
+
+        var candidateHasSteam = candidate.SteamId64.HasValue || !string.IsNullOrWhiteSpace(candidate.SteamId);
+        var existingHasSteam = existing.SteamId64.HasValue || !string.IsNullOrWhiteSpace(existing.SteamId);
+        if (candidateHasSteam != existingHasSteam)
+        {
+            return candidateHasSteam;
+        }
+
+        var candidateHasCandidates = !string.IsNullOrWhiteSpace(candidate.SteamCandidates);
+        var existingHasCandidates = !string.IsNullOrWhiteSpace(existing.SteamCandidates);
+        if (candidateHasCandidates != existingHasCandidates)
+        {
+            return candidateHasCandidates;
+        }
+
+        if (candidate.DemoId.HasValue != existing.DemoId.HasValue)
+        {
+            return candidate.DemoId.HasValue;
+        }
+
+        if ((candidate.DemoId ?? ulong.MaxValue) != (existing.DemoId ?? ulong.MaxValue))
+        {
+            return (candidate.DemoId ?? ulong.MaxValue) < (existing.DemoId ?? ulong.MaxValue);
+        }
+
+        return candidate.ChatIndex < existing.ChatIndex;
+    }
+
+    private static int GetDedupeEvidenceRank(string evidenceKind)
+    {
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Record, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Announcement, StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Command, StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Observed, StringComparison.OrdinalIgnoreCase))
+        {
+            return 3;
+        }
+
+        return 9;
+    }
+
+    private static bool CanTriggerWipe(WrHistoryEntry entry, string evidenceKind)
+    {
+        if (entry.Inferred)
+        {
+            return false;
+        }
+
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Record, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(evidenceKind, WrHistoryConstants.EvidenceKind.Announcement, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(GetEvidenceSource(entry), WrHistoryConstants.EvidenceSource.IrcSet,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
 
     private readonly record struct WrHistoryKey(string Map, string Class, string Bucket, int Centiseconds);
 
@@ -1033,6 +1190,11 @@ internal static class WrHistoryChat
 
     internal static string GetEvidenceKind(WrHistoryEntry entry)
     {
+        if (IsObservedWrSnapshot(entry))
+        {
+            return WrHistoryConstants.EvidenceKind.Observed;
+        }
+
         if (string.Equals(entry.Source, WrHistoryConstants.Source.ObservedWr, StringComparison.OrdinalIgnoreCase))
         {
             return WrHistoryConstants.EvidenceKind.Observed;

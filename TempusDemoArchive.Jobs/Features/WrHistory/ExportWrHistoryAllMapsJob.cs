@@ -11,9 +11,9 @@ public class ExportWrHistoryAllMapsJob : IJob
 
         Console.WriteLine("WR history export uses fixed rules (no env toggles).");
         Console.WriteLine("- Includes subrecords (bonus/course/segments)");
-        Console.WriteLine("- Includes lookups (command output) as evidence, but no demo links");
-        Console.WriteLine("- Includes observed WR snapshots (from +split), but no demo links");
-        Console.WriteLine("- Emits only timeline improvements per segment");
+        Console.WriteLine("- Emits per-segment WR state changes (improvements + wipes)");
+        Console.WriteLine("- Includes record messages + reputable announcements for wiped detection");
+        Console.WriteLine("- Suppresses duplicate non-record rows when a record message exists for the same time");
         Console.WriteLine($"Output dir: {outputRoot}");
 
         await using var db = new ArchiveDbContext();
