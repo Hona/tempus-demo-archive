@@ -6,119 +6,57 @@ public class ExportWrHistoryAllMapsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        var includeSubRecords = GetIncludeSubRecords();
-        var includeInferred = GetIncludeInferred();
-        var includeLookup = GetIncludeLookup();
-        var includeAll = GetIncludeAllEntries();
         var outputRoot = Path.Combine(ArchivePath.TempRoot, "wr-history-all");
         Directory.CreateDirectory(outputRoot);
 
-        Console.WriteLine($"Include subrecords: {includeSubRecords}");
-        Console.WriteLine($"Include inferred: {includeInferred}");
-        Console.WriteLine($"Include lookup: {includeLookup}");
-        Console.WriteLine($"Include all entries: {includeAll}");
+        Console.WriteLine("WR history export uses fixed rules (no env toggles).");
+        Console.WriteLine("- Includes subrecords (bonus/course/segments)");
+        Console.WriteLine("- Includes lookups (command output) as evidence, but no demo links");
+        Console.WriteLine("- Includes observed WR snapshots (from +split), but no demo links");
+        Console.WriteLine("- Emits only timeline improvements per segment");
         Console.WriteLine($"Output dir: {outputRoot}");
 
         await using var db = new ArchiveDbContext();
 
-        var mapDemos = await db.Stvs
-            .AsNoTracking()
-            .Select(x => new { x.DemoId, x.Header.Map })
-            .ToListAsync(cancellationToken);
-        var mapByDemoId = mapDemos.ToDictionary(x => x.DemoId, x => x.Map);
-
-        var tempusChats = await db.StvChats
-            .AsNoTracking()
-            .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
-            .Where(chat => (EF.Functions.Like(chat.Text, "%map run%")
-                            && EF.Functions.Like(chat.Text, "%WR%"))
-                           || EF.Functions.Like(chat.Text, "%beat the map record%")
-                           || EF.Functions.Like(chat.Text, "%set the first map record%")
-                           || EF.Functions.Like(chat.Text, "%is ranked%with time%")
-                           || EF.Functions.Like(chat.Text, "%set Bonus%")
-                           || EF.Functions.Like(chat.Text, "%set Course%")
-                           || EF.Functions.Like(chat.Text, "%set C%")
-                           || EF.Functions.Like(chat.Text, "%broke%Bonus%")
-                           || EF.Functions.Like(chat.Text, "%broke%Course%")
-                           || EF.Functions.Like(chat.Text, "%broke C%")
-                           || EF.Functions.Like(chat.Text, "% WR)%"))
-            .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
-            .ToListAsync(cancellationToken);
-
-        var ircChats = await db.StvChats
-            .AsNoTracking()
-            .Where(chat => EF.Functions.Like(chat.Text, ":: Tempus -%")
-                           || EF.Functions.Like(chat.Text, ":: (%"))
-            .Where(chat => chat.Text.Contains(" WR: "))
-            .Where(chat => chat.Text.Contains(" broke ") || chat.Text.Contains(" set "))
-            .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
-            .ToListAsync(cancellationToken);
-
-        var candidates = new List<ExtractWrHistoryFromChatJob.ChatCandidate>(tempusChats.Count + ircChats.Count);
-        foreach (var chat in tempusChats)
-        {
-            if (mapByDemoId.TryGetValue(chat.DemoId, out var map))
-            {
-                candidates.Add(new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, map, chat.Text,
-                    chat.FromUserId));
-            }
-        }
-
-        foreach (var chat in ircChats)
-        {
-            candidates.Add(new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, null, chat.Text, chat.FromUserId));
-        }
-
-        var demoIds = candidates.Select(x => x.DemoId).Distinct().ToList();
-        var demoDates = await ExtractWrHistoryFromChatJob.LoadDemoDatesAsync(db, demoIds, cancellationToken);
-        var demoUsers = await ExtractWrHistoryFromChatJob.LoadDemoUsersAsync(db, demoIds, cancellationToken);
-
         var entries = new List<WrHistoryEntry>();
-        foreach (var candidate in candidates)
+        var demoBuffer = new List<(ulong DemoId, string Map)>(DbChunk.DefaultSize);
+        var processedDemos = 0;
+        var processedChunks = 0;
+
+        await foreach (var stv in db.Stvs
+                           .AsNoTracking()
+                           .Select(x => new { x.DemoId, x.Header.Map })
+                           .AsAsyncEnumerable()
+                           .WithCancellation(cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            WrHistoryEntry? entry = null;
-            if (!string.IsNullOrWhiteSpace(candidate.Map))
+            demoBuffer.Add((stv.DemoId, stv.Map));
+            if (demoBuffer.Count < DbChunk.DefaultSize)
             {
-                entry = ExtractWrHistoryFromChatJob.TryParseTempusRecord(candidate, candidate.Map!, demoDates, demoUsers);
-            }
-            else
-            {
-                entry = ExtractWrHistoryFromChatJob.TryParseIrcRecord(candidate, null, demoDates, demoUsers);
+                continue;
             }
 
-            if (entry != null)
+            await AddEntriesFromDemoChunkAsync(db, demoBuffer, entries, cancellationToken);
+            processedDemos += demoBuffer.Count;
+            processedChunks++;
+            demoBuffer.Clear();
+
+            if (processedChunks % 100 == 0)
             {
-                entries.Add(entry);
+                Console.WriteLine($"Processed demos: {processedDemos:N0} | Parsed entries: {entries.Count:N0}");
             }
+        }
+
+        if (demoBuffer.Count > 0)
+        {
+            await AddEntriesFromDemoChunkAsync(db, demoBuffer, entries, cancellationToken);
+            processedDemos += demoBuffer.Count;
+            demoBuffer.Clear();
         }
 
         var filtered = entries
             .Where(entry => string.Equals(entry.RecordType, "WR", StringComparison.OrdinalIgnoreCase))
             .Where(entry => entry.Class == "Solly" || entry.Class == "Demo")
             .ToList();
-
-        if (!includeSubRecords)
-        {
-            filtered = filtered
-                .Where(entry => !ExtractWrHistoryFromChatJob.IsSubRecordSource(entry.Source))
-                .ToList();
-        }
-
-        if (!includeInferred)
-        {
-            filtered = filtered
-                .Where(entry => !entry.Inferred)
-                .ToList();
-        }
-
-        if (!includeLookup)
-        {
-            filtered = filtered
-                .Where(entry => !entry.IsLookup)
-                .ToList();
-        }
 
         var grouped = filtered
             .GroupBy(entry => new { entry.Map, entry.Class })
@@ -129,9 +67,7 @@ public class ExportWrHistoryAllMapsJob : IJob
         var totalFiles = 0;
         foreach (var group in grouped)
         {
-            var history = ExtractWrHistoryFromChatJob.BuildWrHistory(group, includeAll)
-                .OrderBy(entry => entry.Date)
-                .ThenBy(entry => entry.RecordTime)
+            var history = WrHistoryChat.BuildWrHistory(group, includeAll: false)
                 .ToList();
 
             if (history.Count == 0)
@@ -139,7 +75,7 @@ public class ExportWrHistoryAllMapsJob : IJob
                 continue;
             }
 
-            var filePath = WriteCsv(outputRoot, group.Key.Map, group.Key.Class, history);
+            var filePath = WrHistoryCsv.Write(outputRoot, group.Key.Map, group.Key.Class, history, cancellationToken);
             totalFiles++;
             Console.WriteLine($"Wrote {filePath}");
         }
@@ -148,58 +84,67 @@ public class ExportWrHistoryAllMapsJob : IJob
         Console.WriteLine($"Files: {totalFiles:N0}");
     }
 
-    private static string WriteCsv(string outputRoot, string map, string @class, IReadOnlyList<WrHistoryEntry> entries)
+    private static async Task AddEntriesFromDemoChunkAsync(ArchiveDbContext db, List<(ulong DemoId, string Map)> demos,
+        List<WrHistoryEntry> entries, CancellationToken cancellationToken)
     {
-        var fileName = ArchiveUtils.ToValidFileName($"wr_history_{map}_{@class}.csv");
-        var filePath = Path.Combine(outputRoot, fileName);
-        var lines = new List<string>
+        if (demos.Count == 0)
         {
-            "date,record_time,player,map,record_type,source,run_time,split,improvement,inferred,demo_id,steam_id64,steam_id,steam_candidates"
-        };
-
-        foreach (var entry in entries)
-        {
-            var date = ArchiveUtils.FormatDate(entry.Date);
-            lines.Add(string.Join(',', new[]
-            {
-                date,
-                entry.RecordTime,
-                entry.Player.Replace(',', ' '),
-                entry.Map.Replace(',', ' '),
-                entry.RecordType,
-                entry.Source.Replace(',', ' '),
-                entry.RunTime ?? string.Empty,
-                entry.Split ?? string.Empty,
-                entry.Improvement ?? string.Empty,
-                entry.Inferred ? "true" : "false",
-                entry.DemoId?.ToString() ?? string.Empty,
-                entry.SteamId64?.ToString() ?? string.Empty,
-                entry.SteamId ?? string.Empty,
-                entry.SteamCandidates ?? string.Empty
-            }));
+            return;
         }
 
-        File.WriteAllLines(filePath, lines);
-        return filePath;
+        var demoIds = demos.Select(x => x.DemoId).ToList();
+        var mapByDemoId = demos.ToDictionary(x => x.DemoId, x => x.Map);
+
+        var tempusChats = await db.StvChats
+            .AsNoTracking()
+            .Where(chat => demoIds.Contains(chat.DemoId))
+            .WhereLikelyTempusWrMessage()
+            .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId, chat.Index, chat.Tick })
+            .ToListAsync(cancellationToken);
+
+        var ircChats = await db.StvChats
+            .AsNoTracking()
+            .Where(chat => demoIds.Contains(chat.DemoId))
+            .WhereLikelyIrcWrMessage()
+            .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId, chat.Index, chat.Tick })
+            .ToListAsync(cancellationToken);
+
+        if (tempusChats.Count == 0 && ircChats.Count == 0)
+        {
+            return;
+        }
+
+        var candidates = new List<WrHistoryChat.ChatCandidate>(tempusChats.Count + ircChats.Count);
+        foreach (var chat in tempusChats)
+        {
+            if (mapByDemoId.TryGetValue(chat.DemoId, out var map))
+            {
+                candidates.Add(new WrHistoryChat.ChatCandidate(chat.DemoId, map, chat.Text, chat.Index, chat.Tick,
+                    chat.FromUserId));
+            }
+        }
+
+        foreach (var chat in ircChats)
+        {
+            candidates.Add(new WrHistoryChat.ChatCandidate(chat.DemoId, null, chat.Text, chat.Index, chat.Tick,
+                chat.FromUserId));
+        }
+
+        var candidateDemoIds = candidates.Select(x => x.DemoId).Distinct().ToList();
+        var demoDates = await WrHistoryChat.LoadDemoDatesAsync(db, candidateDemoIds, cancellationToken);
+        var demoUsers = await WrHistoryChat.LoadDemoUsersAsync(db, candidateDemoIds, cancellationToken);
+
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var entry = WrHistoryChat.TryParseCandidateAnyMap(candidate, demoDates, demoUsers);
+
+            if (entry != null)
+            {
+                entries.Add(entry);
+            }
+        }
     }
 
-    private static bool GetIncludeSubRecords()
-    {
-        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_SUBRECORDS");
-    }
-
-    private static bool GetIncludeAllEntries()
-    {
-        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_ALL");
-    }
-
-    private static bool GetIncludeInferred()
-    {
-        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_INFERRED");
-    }
-
-    private static bool GetIncludeLookup()
-    {
-        return EnvVar.GetBool("TEMPUS_WR_INCLUDE_LOOKUP");
-    }
 }

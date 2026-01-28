@@ -9,12 +9,9 @@ public class InspectUserSentimentJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
@@ -22,13 +19,7 @@ public class InspectUserSentimentJob : IJob
 
         var analyzer = new SentimentIntensityAnalyzer();
 
-        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier);
-
-        var results = await ArchiveQueries.ChatsWithUsers(db)
-            .Join(userQuery,
-                chat => new { chat.DemoId, SteamId64 = chat.SteamId64, SteamId = chat.SteamId ?? string.Empty },
-                user => new { user.DemoId, user.SteamId64, SteamId = (string?)user.SteamIdClean ?? user.SteamId },
-                (chat, _) => chat)
+        var results = await ArchiveQueries.ChatsForUser(db, playerIdentifier)
             .ToListAsync(cancellationToken);
 
         var output = results

@@ -1,42 +1,65 @@
-﻿using TempusDemoArchive.Persistence.Models.STVs;
-
 namespace TempusDemoArchive.Jobs;
 
 public class ExportMapChatLogsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Input Map name: ");
-        var mapName = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(mapName))
+        var mapName = JobPrompts.ReadMapName();
+        if (mapName == null)
         {
-            Console.WriteLine("No map name provided.");
             return;
         }
-        
+
         await using var db = new ArchiveDbContext();
-        var matchingStvs = db.Stvs
+        var matchingStvs = await db.Stvs
             .Where(x => x.Header.Map == mapName)
             .OrderBy(x => x.DemoId)
-            .ToList();
-        
-        var chatLogs = new List<StvChat>();
-        
+            .ToListAsync(cancellationToken);
+
+        var demoIds = matchingStvs.Select(x => x.DemoId).ToList();
+        var demoDates = await ArchiveQueries.LoadDemoDatesByIdAsync(db, demoIds, cancellationToken);
+
+        var rows = new List<string[]>();
+
         foreach (var stv in matchingStvs)
         {
-            var stvChats = await db.StvChats.Where(x => x.DemoId == stv.DemoId)
+            var stvChats = await db.StvChats
+                .Where(x => x.DemoId == stv.DemoId)
+                .OrderBy(x => x.Index)
                 .ToListAsync(cancellationToken);
-            
-            if (stvChats.Count != 0)
+
+            foreach (var chat in stvChats)
             {
-                chatLogs.AddRange(stvChats);
+                var date = demoDates.TryGetValue(stv.DemoId, out var demoDate)
+                    ? ArchiveUtils.FormatDate(demoDate)
+                    : "unknown";
+
+                rows.Add(new[]
+                {
+                    stv.DemoId.ToString(),
+                    date,
+                    stv.Header.Map ?? "unknown",
+                    chat.Tick?.ToString() ?? "",
+                    chat.From ?? "",
+                    chat.Text ?? ""
+                });
             }
         }
-        
-        var fileName = $"{mapName}_chatlogs.txt";
+
+        if (rows.Count == 0)
+        {
+            Console.WriteLine("No chat logs found for this map.");
+            return;
+        }
+
+        var fileName = $"{ArchiveUtils.ToValidFileName(mapName)}_chatlogs.csv";
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        
-        await File.WriteAllLinesAsync(filePath, chatLogs.Select(x => x.Text), cancellationToken);
+
+        CsvOutput.Write(filePath,
+            new[] { "DemoId", "Date", "Map", "Tick", "From", "Text" },
+            rows,
+            cancellationToken);
+
+        Console.WriteLine($"Wrote {rows.Count} chat messages to {filePath}");
     }
 }

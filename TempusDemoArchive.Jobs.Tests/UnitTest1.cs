@@ -30,16 +30,18 @@ public class WrLookupParsingTests
     [Fact]
     public void CompactBonusRecord_IsMarkedLookupEvenWhenSourceIsBonus()
     {
-        var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(
+        var candidate = new WrHistoryChat.ChatCandidate(
             DemoId: 1,
             Map: "jump_beef",
             Text: "Tempus | (Demo WR) jump_beef/Bonus 1 :: 00:04.88 :: alle -tt",
+            ChatIndex: 0,
+            Tick: null,
             FromUserId: null);
 
         var demoDates = new Dictionary<ulong, DateTime?>();
-        var demoUsers = new Dictionary<ulong, ExtractWrHistoryFromChatJob.DemoUsers>();
+        var demoUsers = new Dictionary<ulong, WrHistoryChat.DemoUsers>();
 
-        var entry = ExtractWrHistoryFromChatJob.TryParseTempusRecord(candidate, "jump_beef", demoDates, demoUsers);
+        var entry = WrHistoryChat.TryParseTempusRecord(candidate, "jump_beef", demoDates, demoUsers);
         entry.Should().NotBeNull();
 
         entry!.IsLookup.Should().BeTrue();
@@ -50,16 +52,18 @@ public class WrLookupParsingTests
     [Fact]
     public void RankedRecord_IsMarkedLookupAndInferred()
     {
-        var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(
+        var candidate = new WrHistoryChat.ChatCandidate(
             DemoId: 1,
             Map: "jump_airshift_a4",
             Text: "Tempus | (Demo) newjuls is ranked 1/1134 on jump_airshift_a4 with time: 00:39.81",
+            ChatIndex: 0,
+            Tick: null,
             FromUserId: null);
 
         var demoDates = new Dictionary<ulong, DateTime?>();
-        var demoUsers = new Dictionary<ulong, ExtractWrHistoryFromChatJob.DemoUsers>();
+        var demoUsers = new Dictionary<ulong, WrHistoryChat.DemoUsers>();
 
-        var entry = ExtractWrHistoryFromChatJob.TryParseTempusRecord(candidate, "jump_airshift_a4", demoDates,
+        var entry = WrHistoryChat.TryParseTempusRecord(candidate, "jump_airshift_a4", demoDates,
             demoUsers);
         entry.Should().NotBeNull();
 

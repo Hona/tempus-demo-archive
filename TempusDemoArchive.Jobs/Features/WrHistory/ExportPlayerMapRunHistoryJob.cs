@@ -8,30 +8,19 @@ public class ExportPlayerMapRunHistoryJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
-        Console.WriteLine("Input map name:");
-        var map = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(map))
+        var map = JobPrompts.ReadMapName();
+        if (map == null)
         {
-            Console.WriteLine("No map name provided.");
             return;
         }
 
-        Console.WriteLine("Input class 'D' or 'S':");
-        var @class = Console.ReadLine()!.ToUpper().Trim();
-        if (@class != "D" && @class != "S")
-        {
-            throw new InvalidOperationException("Invalid class");
-        }
+        var @class = JobPrompts.ReadClassDs();
 
         var includeWr = GetIncludeWr();
         Console.WriteLine($"Include WR map runs: {includeWr}");
@@ -46,8 +35,8 @@ public class ExportPlayerMapRunHistoryJob : IJob
                            || EF.Functions.Like(chat.Stv.Header.Map, mapPrefix + "%"))
             .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
             .Where(chat => chat.Text.Contains(" map run "))
-            .Select(chat => new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, chat.Stv!.Header.Map, chat.Text,
-                chat.FromUserId))
+            .Select(chat => new WrHistoryChat.ChatCandidate(chat.DemoId, chat.Stv!.Header.Map, chat.Text, chat.Index,
+                chat.Tick, chat.FromUserId))
             .ToListAsync(cancellationToken);
 
         if (candidateChats.Count == 0)
@@ -57,8 +46,8 @@ public class ExportPlayerMapRunHistoryJob : IJob
         }
 
         var demoIds = candidateChats.Select(x => x.DemoId).Distinct().ToList();
-        var demoDates = await ExtractWrHistoryFromChatJob.LoadDemoDatesAsync(db, demoIds, cancellationToken);
-        var demoUsers = await ExtractWrHistoryFromChatJob.LoadDemoUsersAsync(db, demoIds, cancellationToken);
+        var demoDates = await WrHistoryChat.LoadDemoDatesAsync(db, demoIds, cancellationToken);
+        var demoUsers = await WrHistoryChat.LoadDemoUsersAsync(db, demoIds, cancellationToken);
 
         var results = new List<MapRunEntry>();
         foreach (var candidate in candidateChats)
@@ -83,7 +72,7 @@ public class ExportPlayerMapRunHistoryJob : IJob
             }
 
             var playerName = match.Groups["player"].Value.Trim();
-            var resolved = ExtractWrHistoryFromChatJob.ResolveUserIdentity(candidate, playerName, demoUsers);
+            var resolved = WrHistoryChat.ResolveUserIdentity(candidate, playerName, demoUsers);
             if (resolved.Identity == null || !MatchesTarget(playerIdentifier, resolved.Identity))
             {
                 continue;
@@ -155,28 +144,21 @@ public class ExportPlayerMapRunHistoryJob : IJob
     {
         var fileName = ArchiveUtils.ToValidFileName($"map_run_history_{identifier}_{map}_{@class}.csv");
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        var lines = new List<string>
-        {
-            "date,map,class,label,run_time,split,improvement,demo_id"
-        };
 
-        foreach (var entry in entries)
-        {
-            var date = ArchiveUtils.FormatDate(entry.Date);
-            lines.Add(string.Join(',', new[]
+        CsvOutput.Write(filePath,
+            new[] { "date", "map", "class", "label", "run_time", "split", "improvement", "demo_id" },
+            entries.Select(entry => new string?[]
             {
-                date,
-                entry.Map.Replace(',', ' '),
+                ArchiveUtils.FormatDate(entry.Date),
+                entry.Map,
                 entry.Class,
                 entry.Label,
                 entry.RunTime,
-                entry.Split ?? string.Empty,
-                entry.Improvement ?? string.Empty,
-                entry.DemoId.ToString()
+                entry.Split,
+                entry.Improvement,
+                entry.DemoId.ToString(CultureInfo.InvariantCulture)
             }));
-        }
 
-        File.WriteAllLines(filePath, lines);
         return filePath;
     }
 

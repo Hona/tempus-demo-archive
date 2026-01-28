@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CsvHelper;
 using Microsoft.EntityFrameworkCore;
 using VaderSharp;
 
@@ -36,18 +37,18 @@ public class ExportTempusWrappedJob : IJob
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
         var playerIdentifier = GetPlayerIdentifier();
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
-        var year = GetYear();
-        var includeLogsInRaw = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOGS");
-        var maskMode = GetMaskMode();
-        var topWords = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_WORDS", 20, min: 0, max: 200);
-        var topPhrases = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_PHRASES", 15, min: 0, max: 200);
-        var topLists = EnvVar.GetInt("TEMPUS_WRAPPED_TOP_LISTS", 10, min: 0, max: 200);
+        var options = GetOptions();
+        var year = options.Year;
+        var includeLogsInRaw = options.IncludeLogsInRaw;
+        var maskMode = options.MaskMode;
+        var topWords = options.TopWords;
+        var topPhrases = options.TopPhrases;
+        var topLists = options.TopLists;
 
         var start = new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         var end = new DateTimeOffset(year + 1, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
@@ -91,22 +92,13 @@ public class ExportTempusWrappedJob : IJob
         var resolvedSteamId64 = targetUsers.Select(entry => entry.SteamId64).FirstOrDefault(id => id != null);
         var safeIdentifier = ArchiveUtils.ToValidFileName(playerIdentifier).Replace(' ', '_');
 
-        var nameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var names = new NameCounter();
         foreach (var entry in targetUsers)
         {
-            if (string.IsNullOrWhiteSpace(entry.Name))
-            {
-                continue;
-            }
-
-            nameCounts.TryGetValue(entry.Name, out var current);
-            nameCounts[entry.Name] = current + 1;
+            names.Track(entry.Name);
         }
 
-        var displayName = nameCounts
-            .OrderByDescending(entry => entry.Value)
-            .Select(entry => entry.Key)
-            .FirstOrDefault() ?? playerIdentifier;
+        var displayName = names.MostCommonOr(playerIdentifier);
 
         var safeName = ArchiveUtils.ToValidFileName(displayName).Replace(' ', '_');
         var idPart = resolvedSteamId64?.ToString(CultureInfo.InvariantCulture) ?? safeIdentifier;
@@ -116,7 +108,7 @@ public class ExportTempusWrappedJob : IJob
         var chatTxtPath = Path.Combine(ArchivePath.TempRoot, finalStem + "_chat.txt");
         var rawPath = Path.Combine(ArchivePath.TempRoot, finalStem + "_raw.txt");
 
-        var demoMetaById = await LoadDemoMetaAsync(db, demoIds, cancellationToken);
+        var demoMetaById = await PlaytimeMetaLoader.LoadByDemoIdAsync(db, demoIds, cancellationToken);
 
         var demoUserIds = BuildDemoUserIds(targetUsers);
 
@@ -170,11 +162,19 @@ public class ExportTempusWrappedJob : IJob
         var sentimentByMonth = new Dictionary<string, SentimentAggregate>(StringComparer.Ordinal);
 
         await using (var csvStream = File.Open(chatCsvPath, FileMode.Create, FileAccess.Write, FileShare.Read))
-        await using (var csvWriter = new StreamWriter(csvStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+        await using (var csvTextWriter = new StreamWriter(csvStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
         await using (var txtStream = File.Open(chatTxtPath, FileMode.Create, FileAccess.Write, FileShare.Read))
         await using (var txtWriter = new StreamWriter(txtStream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
         {
-            WriteCsvRow(csvWriter, "timestamp_utc", "map", "server", "demo_id", "tick", "chat_index", "text");
+            using var csv = new CsvWriter(csvTextWriter, CultureInfo.InvariantCulture);
+            csv.WriteField("timestamp_utc");
+            csv.WriteField("map");
+            csv.WriteField("server");
+            csv.WriteField("demo_id");
+            csv.WriteField("tick");
+            csv.WriteField("chat_index");
+            csv.WriteField("text");
+            csv.NextRecord();
 
             await foreach (var row in chatQuery.AsAsyncEnumerable().WithCancellation(cancellationToken))
             {
@@ -291,14 +291,14 @@ public class ExportTempusWrappedJob : IJob
                     }
                 }
 
-                WriteCsvRow(csvWriter,
-                    dtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                    map,
-                    server,
-                    row.DemoId.ToString(CultureInfo.InvariantCulture),
-                    row.Tick?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
-                    row.ChatIndex.ToString(CultureInfo.InvariantCulture),
-                    MaskForDisplay(row.Text, maskMode));
+                csv.WriteField(dtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+                csv.WriteField(map);
+                csv.WriteField(server);
+                csv.WriteField(row.DemoId.ToString(CultureInfo.InvariantCulture));
+                csv.WriteField(row.Tick?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+                csv.WriteField(row.ChatIndex.ToString(CultureInfo.InvariantCulture));
+                csv.WriteField(MaskForDisplay(row.Text, maskMode));
+                csv.NextRecord();
 
                 await txtWriter.WriteAsync(dtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
                 await txtWriter.WriteAsync(" | ");
@@ -335,8 +335,8 @@ public class ExportTempusWrappedJob : IJob
 
         funniest ??= topPositive.FirstOrDefault();
 
-        var includeInferredWr = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_INFERRED_WR");
-        var includeLookupWr = EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOOKUP_WR");
+        var includeInferredWr = options.IncludeInferredWr;
+        var includeLookupWr = options.IncludeLookupWr;
 
         var resolvedSteamId = targetUsers
             .Select(entry => entry.SteamId)
@@ -352,7 +352,7 @@ public class ExportTempusWrappedJob : IJob
 
         var wrImprovementsRaw = wrEntriesRaw
             .GroupBy(entry => new { entry.Map, entry.Class })
-            .SelectMany(group => ExtractWrHistoryFromChatJob.BuildWrHistory(group, includeAll: false))
+            .SelectMany(group => WrHistoryChat.BuildWrHistory(group, includeAll: false))
             .ToList();
         var inferredWrCount = wrImprovementsRaw.Count(wr => wr.Inferred);
         var lookupWrCount = wrImprovementsRaw.Count(wr => wr.IsLookup);
@@ -658,6 +658,29 @@ public class ExportTempusWrappedJob : IJob
         Console.WriteLine($"System prompt: {GetSystemPromptPath()}");
     }
 
+    private sealed record WrappedOptions(
+        int Year,
+        bool IncludeLogsInRaw,
+        MaskMode MaskMode,
+        int TopWords,
+        int TopPhrases,
+        int TopLists,
+        bool IncludeInferredWr,
+        bool IncludeLookupWr);
+
+    private static WrappedOptions GetOptions()
+    {
+        return new WrappedOptions(
+            Year: GetYear(),
+            IncludeLogsInRaw: EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOGS"),
+            MaskMode: GetMaskMode(),
+            TopWords: EnvVar.GetInt("TEMPUS_WRAPPED_TOP_WORDS", 20, min: 0, max: 200),
+            TopPhrases: EnvVar.GetInt("TEMPUS_WRAPPED_TOP_PHRASES", 15, min: 0, max: 200),
+            TopLists: EnvVar.GetInt("TEMPUS_WRAPPED_TOP_LISTS", 10, min: 0, max: 200),
+            IncludeInferredWr: EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_INFERRED_WR"),
+            IncludeLookupWr: EnvVar.GetBool("TEMPUS_WRAPPED_INCLUDE_LOOKUP_WR"));
+    }
+
     private static string? GetPlayerIdentifier()
     {
         var env = EnvVar.GetString("TEMPUS_WRAPPED_USER");
@@ -666,8 +689,7 @@ public class ExportTempusWrappedJob : IJob
             return env.Trim();
         }
 
-        Console.WriteLine("Enter steam ID or Steam64:");
-        return Console.ReadLine()?.Trim();
+        return JobPrompts.ReadSteamIdentifier();
     }
 
     private static int GetYear()
@@ -807,35 +829,6 @@ public class ExportTempusWrappedJob : IJob
         return (sorted[mid - 1] + sorted[mid]) / 2.0;
     }
 
-    private static void WriteCsvRow(TextWriter writer, params string[] fields)
-    {
-        for (var i = 0; i < fields.Length; i++)
-        {
-            if (i > 0)
-            {
-                writer.Write(',');
-            }
-
-            writer.Write(EscapeCsv(fields[i]));
-        }
-
-        writer.WriteLine();
-    }
-
-    private static string EscapeCsv(string value)
-    {
-        var needsQuotes = value.Contains(',', StringComparison.Ordinal)
-                          || value.Contains('"', StringComparison.Ordinal)
-                          || value.Contains('\n', StringComparison.Ordinal)
-                          || value.Contains('\r', StringComparison.Ordinal);
-        if (!needsQuotes)
-        {
-            return value;
-        }
-
-        return "\"" + value.Replace("\"", "\"\"") + "\"";
-    }
-
     private static string MoveToStem(string currentPath, string fileName)
     {
         var nextPath = Path.Combine(ArchivePath.TempRoot, fileName);
@@ -936,27 +929,6 @@ public class ExportTempusWrappedJob : IJob
         }
 
         return demoUserIds;
-    }
-
-    private static async Task<Dictionary<ulong, PlaytimeDemoMeta>> LoadDemoMetaAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var metas = new Dictionary<ulong, PlaytimeDemoMeta>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var rows = await db.Stvs
-                .AsNoTracking()
-                .Where(stv => chunk.Contains(stv.DemoId))
-                .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, stv.Header.Server, stv.IntervalPerTick,
-                    stv.Header.Ticks))
-                .ToListAsync(cancellationToken);
-            foreach (var row in rows)
-            {
-                metas[row.DemoId] = row;
-            }
-        }
-
-        return metas;
     }
 
     private static async Task<PlaytimeResult> ComputePlaytimeAsync(ArchiveDbContext db,
@@ -1388,7 +1360,7 @@ public class ExportTempusWrappedJob : IJob
         var demoDates = demoDateById.ToDictionary(entry => entry.Key,
             entry => (DateTime?)ArchiveUtils.GetDateFromTimestamp(entry.Value));
 
-        var demoUsers = await ExtractWrHistoryFromChatJob.LoadDemoUsersAsync(db, demoIds, cancellationToken);
+        var demoUsers = await WrHistoryChat.LoadDemoUsersAsync(db, demoIds, cancellationToken);
 
         var events = new List<WrHistoryEntry>();
 
@@ -1397,20 +1369,8 @@ public class ExportTempusWrappedJob : IJob
             var tempusChats = await db.StvChats
                 .AsNoTracking()
                 .Where(chat => chunk.Contains(chat.DemoId))
-                .Where(chat => EF.Functions.Like(chat.Text, "Tempus | (%"))
-                .Where(chat => (EF.Functions.Like(chat.Text, "%map run%")
-                                && EF.Functions.Like(chat.Text, "%WR%"))
-                               || EF.Functions.Like(chat.Text, "%beat the map record%")
-                               || EF.Functions.Like(chat.Text, "%set the first map record%")
-                               || EF.Functions.Like(chat.Text, "%is ranked%with time%")
-                               || EF.Functions.Like(chat.Text, "%set Bonus%")
-                               || EF.Functions.Like(chat.Text, "%set Course%")
-                               || EF.Functions.Like(chat.Text, "%set C%")
-                               || EF.Functions.Like(chat.Text, "%broke%Bonus%")
-                               || EF.Functions.Like(chat.Text, "%broke%Course%")
-                               || EF.Functions.Like(chat.Text, "%broke C%")
-                               || EF.Functions.Like(chat.Text, "% WR)%"))
-                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
+                .WhereLikelyTempusWrMessage()
+                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId, chat.Index, chat.Tick })
                 .ToListAsync(cancellationToken);
 
             foreach (var chat in tempusChats)
@@ -1425,10 +1385,10 @@ public class ExportTempusWrappedJob : IJob
                     continue;
                 }
 
-                var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, meta.Map, chat.Text,
+                var candidate = new WrHistoryChat.ChatCandidate(chat.DemoId, meta.Map, chat.Text, chat.Index, chat.Tick,
                     chat.FromUserId);
 
-                var entry = ExtractWrHistoryFromChatJob.TryParseTempusRecord(candidate, meta.Map, demoDates, demoUsers);
+                var entry = WrHistoryChat.TryParseCandidateAnyMap(candidate, demoDates, demoUsers);
                 if (entry == null)
                 {
                     continue;
@@ -1445,11 +1405,8 @@ public class ExportTempusWrappedJob : IJob
             var ircChats = await db.StvChats
                 .AsNoTracking()
                 .Where(chat => chunk.Contains(chat.DemoId))
-                .Where(chat => EF.Functions.Like(chat.Text, ":: Tempus -%")
-                               || EF.Functions.Like(chat.Text, ":: (%"))
-                .Where(chat => chat.Text.Contains(" WR: "))
-                .Where(chat => chat.Text.Contains(" broke ") || chat.Text.Contains(" set "))
-                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId })
+                .WhereLikelyIrcWrMessage()
+                .Select(chat => new { chat.DemoId, chat.Text, chat.FromUserId, chat.Index, chat.Tick })
                 .ToListAsync(cancellationToken);
 
             foreach (var chat in ircChats)
@@ -1459,9 +1416,9 @@ public class ExportTempusWrappedJob : IJob
                     continue;
                 }
 
-                var candidate = new ExtractWrHistoryFromChatJob.ChatCandidate(chat.DemoId, null, chat.Text,
+                var candidate = new WrHistoryChat.ChatCandidate(chat.DemoId, null, chat.Text, chat.Index, chat.Tick,
                     chat.FromUserId);
-                var entry = ExtractWrHistoryFromChatJob.TryParseIrcRecord(candidate, null, demoDates, demoUsers);
+                var entry = WrHistoryChat.TryParseCandidateAnyMap(candidate, demoDates, demoUsers);
                 if (entry == null)
                 {
                     continue;
@@ -1505,23 +1462,14 @@ public class ExportTempusWrappedJob : IJob
         public int RepliesAfterYou { get; set; }
         public int RepliesBeforeYou { get; set; }
 
-        private readonly Dictionary<string, int> _nameCounts = new(StringComparer.OrdinalIgnoreCase);
+        private readonly NameCounter _names = new();
 
         public void TrackName(string name)
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return;
-            }
-
-            _nameCounts.TryGetValue(name, out var current);
-            _nameCounts[name] = current + 1;
+            _names.Track(name);
         }
 
-        public string DisplayName => _nameCounts
-            .OrderByDescending(entry => entry.Value)
-            .Select(entry => entry.Key)
-            .FirstOrDefault() ?? (SteamId64?.ToString(CultureInfo.InvariantCulture) ?? SteamId);
+        public string DisplayName => _names.MostCommonOr(SteamId64?.ToString(CultureInfo.InvariantCulture) ?? SteamId);
     }
 
     private sealed record FriendRow(

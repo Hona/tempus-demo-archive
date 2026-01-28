@@ -6,25 +6,20 @@ public class ExportUserChatLogsJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID in format e.g. 'STEAM_0:0:27790406'");
-        var steamId = Console.ReadLine();
-
-        if (string.IsNullOrWhiteSpace(steamId))
+        var steamId = JobPrompts.ReadNonEmptyLine("Enter steam ID in format e.g. 'STEAM_0:0:27790406'",
+            "No steam ID provided.");
+        if (steamId == null)
         {
-            Console.WriteLine("No steam ID provided.");
             return;
         }
 
         await using var db = new ArchiveDbContext();
 
-        var userQuery = ArchiveQueries.SteamUserQuery(db, steamId);
-
-        var matching = await ArchiveQueries.ChatsWithUsers(db)
-            .Join(userQuery,
-                chat => new { chat.DemoId, chat.SteamId64, SteamId = chat.SteamId ?? string.Empty },
-                user => new { user.DemoId, user.SteamId64, SteamId = (string?)user.SteamIdClean ?? user.SteamId },
-                (chat, _) => chat)
+        var matching = await ArchiveQueries.ChatsForUser(db, steamId)
             .ToListAsync(cancellationToken);
+
+        var demoIds = matching.Select(x => x.DemoId).Distinct().ToList();
+        var demoDates = await ArchiveQueries.LoadDemoDatesByIdAsync(db, demoIds, cancellationToken);
         
         var stringBuilder = new StringBuilder();
         
@@ -32,8 +27,9 @@ public class ExportUserChatLogsJob : IJob
         
         foreach (var match in matching)
         {
-            var demo = await db.Demos.FirstOrDefaultAsync(x => x.Id == match.DemoId, cancellationToken: cancellationToken);
-            var date = demo == null ? "unknown" : ArchiveUtils.FormatDate(ArchiveUtils.GetDateFromTimestamp(demo.Date));
+            var date = demoDates.TryGetValue(match.DemoId, out var demoDate)
+                ? ArchiveUtils.FormatDate(demoDate)
+                : "unknown";
             stringBuilder.AppendLine(date + ": " + match.Text);
         }
         

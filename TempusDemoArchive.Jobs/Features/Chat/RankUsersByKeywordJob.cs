@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 
 namespace TempusDemoArchive.Jobs;
@@ -19,33 +18,37 @@ public class RankUsersByKeywordJob : IJob
         }
 
         var words = input.Split(',').Select(x => x.Trim().ToLowerInvariant()).ToList();
-        
+
         var matching = await ArchiveQueries.ChatsWithUsers(db)
             .Where(chat => words.Any(word => EF.Functions.Like(chat.Text, $"%{word}%")))
             .ToListAsync(cancellationToken: cancellationToken);
 
-        var sb = new StringBuilder();
-        
-        foreach (var match in matching
-                     .GroupBy(x => new { x.SteamId64, x.SteamId, x.Name })
-                     .OrderByDescending(x => x.Count()))
-        {
-            var key = match.Key;
-            var steamId = key.SteamId ?? "unknown";
-            var name = string.IsNullOrWhiteSpace(key.Name) ? "unknown" : key.Name;
+        var results = matching
+            .GroupBy(x => new { x.SteamId64, x.SteamId, x.Name })
+            .OrderByDescending(x => x.Count())
+            .Select(match => new[]
+            {
+                string.IsNullOrWhiteSpace(match.Key.Name) ? "unknown" : match.Key.Name,
+                match.Key.SteamId ?? "unknown",
+                match.Key.SteamId64?.ToString() ?? "",
+                match.Count().ToString()
+            })
+            .ToList();
 
-            sb.AppendLine($"{name} ({steamId}) : {match.Count()}");
+        foreach (var result in results)
+        {
+            Console.WriteLine($"{result[0]} ({result[1]}) : {result[3]}");
         }
-        
-        var text = sb.ToString();
-        
-        Console.WriteLine(text);
-        
+
         var wordsKey = string.Join("_", words);
-        var fileName = ArchiveUtils.ToValidFileName($"keyword_rank_{wordsKey}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
-        
+        var fileName = ArchiveUtils.ToValidFileName($"keyword_rank_{wordsKey}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv");
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        
-        await File.WriteAllTextAsync(filePath, text, cancellationToken);
+
+        CsvOutput.Write(filePath,
+            new[] { "Name", "SteamId", "SteamId64", "MatchCount" },
+            results,
+            cancellationToken);
+
+        Console.WriteLine($"Wrote {filePath}");
     }
 }

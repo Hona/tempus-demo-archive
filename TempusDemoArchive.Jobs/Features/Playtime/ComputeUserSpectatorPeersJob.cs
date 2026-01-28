@@ -14,55 +14,29 @@ public class ComputeUserSpectatorPeersJob : IJob
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
         await using var db = new ArchiveDbContext();
-        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier)
-            .AsNoTracking()
-            .Where(user => user.UserId != null);
 
-        var targetUsers = await userQuery
-            .Select(user => new TargetUserEntry(user.DemoId, user.UserId!.Value, user.Name))
-            .ToListAsync(cancellationToken);
-
-        if (targetUsers.Count == 0)
+        var resolvedUser = await PlaytimeUserResolver.ResolveAsync(db, playerIdentifier, cancellationToken);
+        if (resolvedUser == null)
         {
             Console.WriteLine("No demos found for that user.");
             return;
         }
 
-        var displayName = targetUsers
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.Name))
-            .GroupBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(group => group.Count())
-            .Select(group => group.Key)
-            .FirstOrDefault() ?? playerIdentifier;
-
-        var targetDemoUserIds = new Dictionary<ulong, HashSet<int>>();
-        foreach (var entry in targetUsers)
-        {
-            if (!targetDemoUserIds.TryGetValue(entry.DemoId, out var ids))
-            {
-                ids = new HashSet<int>();
-                targetDemoUserIds[entry.DemoId] = ids;
-            }
-
-            ids.Add(entry.UserId);
-        }
-
-        var demoIds = targetDemoUserIds.Keys.ToList();
-        var metaByDemo = await LoadMetaAsync(db, demoIds, cancellationToken);
-        var usersByDemo = await LoadUsersAsync(db, demoIds, cancellationToken);
-        var spawnsByDemo = await LoadSpawnsAsync(db, demoIds, cancellationToken);
-        var deathsByDemo = await LoadDeathsAsync(db, demoIds, cancellationToken);
-        var teamsByDemo = await LoadTeamChangesAsync(db, demoIds, cancellationToken);
+        var displayName = resolvedUser.DisplayName;
+        var targetDemoUserIds = resolvedUser.DemoUserIds;
+        var demoIds = resolvedUser.DemoIds;
+        var metaByDemo = await PlaytimeMetaLoader.LoadByDemoIdAsync(db, demoIds, cancellationToken);
+        var usersByDemo = await PlaytimeEventLoader.LoadUsersAsync(db, demoIds, cancellationToken);
+        var spawnsByDemo = await PlaytimeEventLoader.LoadSpawnsAsync(db, demoIds, cancellationToken);
+        var deathsByDemo = await PlaytimeEventLoader.LoadDeathsAsync(db, demoIds, cancellationToken);
+        var teamsByDemo = await PlaytimeEventLoader.LoadTeamChangesAsync(db, demoIds, cancellationToken);
 
         var peers = new Dictionary<UserKey, PeerTotals>();
         var processedDemos = 0;
@@ -96,7 +70,7 @@ public class ComputeUserSpectatorPeersJob : IJob
                 ? teamList
                 : Array.Empty<PlaytimeTeamChangeEvent>();
 
-            var demoEndTick = GetDemoEndTick(meta, demoSpawns, demoDeaths, demoTeams);
+            var demoEndTick = PlaytimeCalculator.GetDemoEndTick(meta, demoSpawns, demoDeaths, demoTeams);
             if (demoEndTick <= 0)
             {
                 continue;
@@ -112,9 +86,9 @@ public class ComputeUserSpectatorPeersJob : IJob
                 continue;
             }
 
-            IReadOnlyList<UserEntry> demoUsers = usersByDemo.TryGetValue(demoId, out var userList)
+            IReadOnlyList<PlaytimeUserEntry> demoUsers = usersByDemo.TryGetValue(demoId, out var userList)
                 ? userList
-                : Array.Empty<UserEntry>();
+                : Array.Empty<PlaytimeUserEntry>();
 
             var spawnsByUser = demoSpawns.GroupBy(spawn => spawn.UserId)
                 .ToDictionary(group => group.Key, group => (IReadOnlyList<PlaytimeSpawnEvent>)group.ToList());
@@ -207,7 +181,29 @@ public class ComputeUserSpectatorPeersJob : IJob
 
         var fileName = ArchiveUtils.ToValidFileName($"spectator_peers_{playerIdentifier}.csv");
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        await WriteCsvAsync(filePath, rows, cancellationToken);
+
+        CsvOutput.Write(filePath,
+            new[]
+            {
+                "steam_id64",
+                "steam_id",
+                "name",
+                "specs_you_seconds",
+                "you_spec_seconds",
+                "specs_you_demos",
+                "you_spec_demos"
+            },
+            rows.Select(row => new string?[]
+            {
+                row.SteamId64?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                row.SteamId,
+                row.Name,
+                row.SpecsYouSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.YouSpecSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.SpecsYouDemoCount.ToString(CultureInfo.InvariantCulture),
+                row.YouSpecDemoCount.ToString(CultureInfo.InvariantCulture)
+            }),
+            cancellationToken);
 
         Console.WriteLine($"Player: {displayName}");
         Console.WriteLine($"Demos processed: {processedDemos:N0}");
@@ -227,162 +223,6 @@ public class ComputeUserSpectatorPeersJob : IJob
         {
             Console.WriteLine($"{row.Name} | {FormatHours(row.YouSpecSeconds)} | demos {row.YouSpecDemoCount} | {FormatSteam(row)}");
         }
-    }
-
-    private static async Task<Dictionary<ulong, PlaytimeDemoMeta>> LoadMetaAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, PlaytimeDemoMeta>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var metas = await db.Stvs
-                .AsNoTracking()
-                .Where(stv => chunk.Contains(stv.DemoId))
-                .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, string.Empty, stv.IntervalPerTick,
-                    stv.Header.Ticks))
-                .ToListAsync(cancellationToken);
-            foreach (var meta in metas)
-            {
-                result[meta.DemoId] = meta;
-            }
-        }
-
-        return result;
-    }
-
-    private static async Task<Dictionary<ulong, List<UserEntry>>> LoadUsersAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, List<UserEntry>>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var users = await db.StvUsers
-                .AsNoTracking()
-                .Where(user => chunk.Contains(user.DemoId))
-                .Select(user => new UserEntry(user.DemoId, user.UserId, user.Name, user.SteamIdClean,
-                    user.SteamId, user.SteamId64))
-                .ToListAsync(cancellationToken);
-            foreach (var user in users)
-            {
-                if (!result.TryGetValue(user.DemoId, out var list))
-                {
-                    list = new List<UserEntry>();
-                    result[user.DemoId] = list;
-                }
-
-                list.Add(user);
-            }
-        }
-
-        return result;
-    }
-
-    private static async Task<Dictionary<ulong, List<PlaytimeSpawnEvent>>> LoadSpawnsAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, List<PlaytimeSpawnEvent>>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var spawns = await db.StvSpawns
-                .AsNoTracking()
-                .Where(spawn => chunk.Contains(spawn.DemoId))
-                .Select(spawn => new PlaytimeSpawnEvent(spawn.DemoId, spawn.UserId, spawn.Tick, spawn.Class,
-                    spawn.Team))
-                .ToListAsync(cancellationToken);
-            foreach (var spawn in spawns)
-            {
-                if (!result.TryGetValue(spawn.DemoId, out var list))
-                {
-                    list = new List<PlaytimeSpawnEvent>();
-                    result[spawn.DemoId] = list;
-                }
-
-                list.Add(spawn);
-            }
-        }
-
-        return result;
-    }
-
-    private static async Task<Dictionary<ulong, List<PlaytimeDeathEvent>>> LoadDeathsAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, List<PlaytimeDeathEvent>>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var deaths = await db.StvDeaths
-                .AsNoTracking()
-                .Where(death => chunk.Contains(death.DemoId))
-                .Select(death => new PlaytimeDeathEvent(death.DemoId, death.VictimUserId, death.Tick))
-                .ToListAsync(cancellationToken);
-            foreach (var death in deaths)
-            {
-                if (!result.TryGetValue(death.DemoId, out var list))
-                {
-                    list = new List<PlaytimeDeathEvent>();
-                    result[death.DemoId] = list;
-                }
-
-                list.Add(death);
-            }
-        }
-
-        return result;
-    }
-
-    private static async Task<Dictionary<ulong, List<PlaytimeTeamChangeEvent>>> LoadTeamChangesAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, List<PlaytimeTeamChangeEvent>>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var changes = await db.StvTeamChanges
-                .AsNoTracking()
-                .Where(change => chunk.Contains(change.DemoId))
-                .Select(change => new PlaytimeTeamChangeEvent(change.DemoId, change.UserId, change.Tick, change.Team,
-                    change.Disconnect))
-                .ToListAsync(cancellationToken);
-            foreach (var change in changes)
-            {
-                if (!result.TryGetValue(change.DemoId, out var list))
-                {
-                    list = new List<PlaytimeTeamChangeEvent>();
-                    result[change.DemoId] = list;
-                }
-
-                list.Add(change);
-            }
-        }
-
-        return result;
-    }
-
-    private static int GetDemoEndTick(PlaytimeDemoMeta meta, IReadOnlyList<PlaytimeSpawnEvent> spawns,
-        IReadOnlyList<PlaytimeDeathEvent> deaths, IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges)
-    {
-        var demoEndTick = meta.HeaderTicks ?? 0;
-        if (demoEndTick > 0)
-        {
-            return demoEndTick;
-        }
-
-        var max = 0;
-        if (spawns.Count > 0)
-        {
-            max = Math.Max(max, spawns.Max(entry => entry.Tick));
-        }
-
-        if (deaths.Count > 0)
-        {
-            max = Math.Max(max, deaths.Max(entry => entry.Tick));
-        }
-
-        if (teamChanges.Count > 0)
-        {
-            max = Math.Max(max, teamChanges.Max(entry => entry.Tick));
-        }
-
-        return max;
     }
 
     private static List<Interval> BuildAliveIntervals(int userId, IReadOnlyList<PlaytimeSpawnEvent> spawns,
@@ -625,33 +465,6 @@ public class ComputeUserSpectatorPeersJob : IJob
         return string.Equals(team, "spectator", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task WriteCsvAsync(string path, IReadOnlyList<PeerRow> rows,
-        CancellationToken cancellationToken)
-    {
-        var lines = new List<string>
-        {
-            "steam_id64,steam_id,name,specs_you_seconds,you_spec_seconds,specs_you_demos,you_spec_demos"
-        };
-        foreach (var row in rows)
-        {
-            var steam64 = row.SteamId64?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-            var name = row.Name.Replace(",", " ");
-            var steamId = row.SteamId.Replace(",", " ");
-            lines.Add(string.Join(',', new[]
-            {
-                steam64,
-                steamId,
-                name,
-                row.SpecsYouSeconds.ToString("0.##", CultureInfo.InvariantCulture),
-                row.YouSpecSeconds.ToString("0.##", CultureInfo.InvariantCulture),
-                row.SpecsYouDemoCount.ToString(CultureInfo.InvariantCulture),
-                row.YouSpecDemoCount.ToString(CultureInfo.InvariantCulture)
-            }));
-        }
-
-        await File.WriteAllLinesAsync(path, lines, cancellationToken);
-    }
-
     private static string FormatHours(double seconds)
     {
         return HumanTime.FormatHours(seconds);
@@ -662,9 +475,6 @@ public class ComputeUserSpectatorPeersJob : IJob
         return row.SteamId64?.ToString() ?? row.SteamId;
     }
 
-    private sealed record TargetUserEntry(ulong DemoId, int UserId, string Name);
-    private sealed record UserEntry(ulong DemoId, int? UserId, string Name, string? SteamIdClean, string SteamId,
-        long? SteamId64);
     private sealed record PlayerEvent(int Tick, EventKind Kind, string? Class);
     private sealed record SpectatorEvent(int Tick, SpectatorEventKind Kind);
     private sealed record Interval(int StartTick, int EndTick);
@@ -678,28 +488,14 @@ public class ComputeUserSpectatorPeersJob : IJob
         public double YouSpecSeconds { get; set; }
         public int SpecsYouDemoCount { get; set; }
         public int YouSpecDemoCount { get; set; }
-        private readonly Dictionary<string, int> _nameCounts = new(StringComparer.OrdinalIgnoreCase);
+        private readonly NameCounter _names = new();
 
         public void TrackName(string name)
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return;
-            }
-
-            if (_nameCounts.TryGetValue(name, out var current))
-            {
-                _nameCounts[name] = current + 1;
-                return;
-            }
-
-            _nameCounts[name] = 1;
+            _names.Track(name);
         }
 
-        public string DisplayName => _nameCounts
-            .OrderByDescending(entry => entry.Value)
-            .Select(entry => entry.Key)
-            .FirstOrDefault() ?? "unknown";
+        public string DisplayName => _names.MostCommonOr("unknown");
     }
 
     private enum EventKind

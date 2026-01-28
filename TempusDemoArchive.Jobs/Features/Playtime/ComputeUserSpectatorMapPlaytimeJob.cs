@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 
 namespace TempusDemoArchive.Jobs;
@@ -8,51 +7,29 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
         await using var db = new ArchiveDbContext();
-        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier)
-            .AsNoTracking()
-            .Where(user => user.UserId != null);
 
-        var userEntries = await userQuery
-            .Select(user => new UserEntry(user.DemoId, user.UserId!.Value, user.Name))
-            .ToListAsync(cancellationToken);
-
-        if (userEntries.Count == 0)
+        var resolvedUser = await PlaytimeUserResolver.ResolveAsync(db, playerIdentifier, cancellationToken);
+        if (resolvedUser == null)
         {
             Console.WriteLine("No demos found for that user.");
             return;
         }
 
-        var displayName = userEntries
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.Name))
-            .GroupBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(group => group.Count())
-            .Select(group => group.Key)
-            .FirstOrDefault() ?? playerIdentifier;
+        var displayName = resolvedUser.DisplayName;
+        var demoUserIds = resolvedUser.DemoUserIds;
+        var demoIds = resolvedUser.DemoIds;
+        var metaByDemo = await PlaytimeMetaLoader.LoadByDemoIdAsync(db, demoIds, cancellationToken);
 
-        var demoUserIds = new Dictionary<ulong, HashSet<int>>();
-        foreach (var entry in userEntries)
-        {
-            if (!demoUserIds.TryGetValue(entry.DemoId, out var ids))
-            {
-                ids = new HashSet<int>();
-                demoUserIds[entry.DemoId] = ids;
-            }
-
-            ids.Add(entry.UserId);
-        }
-
-        var demoIds = demoUserIds.Keys.ToList();
-        var metaByDemo = await LoadMetaAsync(db, demoIds, cancellationToken);
+        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier)
+            .AsNoTracking()
+            .Where(user => user.UserId != null);
 
         var teamChanges = await db.StvTeamChanges
             .AsNoTracking()
@@ -68,7 +45,7 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
             .Join(userQuery,
                 spawn => new { spawn.DemoId, UserId = (int?)spawn.UserId },
                 user => new { user.DemoId, UserId = user.UserId },
-                (spawn, _) => new SpawnEvent(spawn.DemoId, spawn.UserId, spawn.Tick))
+                (spawn, _) => new PlaytimeSpawnEvent(spawn.DemoId, spawn.UserId, spawn.Tick, spawn.Class, spawn.Team))
             .ToListAsync(cancellationToken);
 
         var teamsByDemo = teamChanges.GroupBy(change => change.DemoId)
@@ -100,11 +77,12 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
             IReadOnlyList<PlaytimeTeamChangeEvent> demoTeams = teamsByDemo.TryGetValue(demoId, out var teamList)
                 ? teamList
                 : Array.Empty<PlaytimeTeamChangeEvent>();
-            IReadOnlyList<SpawnEvent> demoSpawns = spawnsByDemo.TryGetValue(demoId, out var spawnList)
+            IReadOnlyList<PlaytimeSpawnEvent> demoSpawns = spawnsByDemo.TryGetValue(demoId, out var spawnList)
                 ? spawnList
-                : Array.Empty<SpawnEvent>();
+                : Array.Empty<PlaytimeSpawnEvent>();
 
-            var demoEndTick = GetDemoEndTick(meta, demoTeams, demoSpawns);
+            var demoEndTick = PlaytimeCalculator.GetDemoEndTick(meta, demoSpawns, Array.Empty<PlaytimeDeathEvent>(),
+                demoTeams);
             if (demoEndTick <= 0)
             {
                 continue;
@@ -151,7 +129,16 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
 
         var fileName = ArchiveUtils.ToValidFileName($"map_spectator_time_{playerIdentifier}.csv");
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        await WriteCsvAsync(filePath, ordered, cancellationToken);
+
+        CsvOutput.Write(filePath,
+            new[] { "map", "spectator_seconds", "demo_count" },
+            ordered.Select(row => new string?[]
+            {
+                row.Map,
+                row.SpectatorSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.DemoCount.ToString(CultureInfo.InvariantCulture)
+            }),
+            cancellationToken);
 
         Console.WriteLine($"Player: {displayName}");
         Console.WriteLine($"Demos processed: {processedDemos:N0}");
@@ -165,52 +152,8 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
         }
     }
 
-    private static async Task<Dictionary<ulong, PlaytimeDemoMeta>> LoadMetaAsync(ArchiveDbContext db,
-        IReadOnlyList<ulong> demoIds, CancellationToken cancellationToken)
-    {
-        var result = new Dictionary<ulong, PlaytimeDemoMeta>();
-        foreach (var chunk in DbChunk.Chunk(demoIds))
-        {
-            var metas = await db.Stvs
-                .AsNoTracking()
-                .Where(stv => chunk.Contains(stv.DemoId))
-                .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, string.Empty, stv.IntervalPerTick,
-                    stv.Header.Ticks))
-                .ToListAsync(cancellationToken);
-            foreach (var meta in metas)
-            {
-                result[meta.DemoId] = meta;
-            }
-        }
-
-        return result;
-    }
-
-    private static int GetDemoEndTick(PlaytimeDemoMeta meta, IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges,
-        IReadOnlyList<SpawnEvent> spawns)
-    {
-        var demoEndTick = meta.HeaderTicks ?? 0;
-        if (demoEndTick > 0)
-        {
-            return demoEndTick;
-        }
-
-        var max = 0;
-        if (teamChanges.Count > 0)
-        {
-            max = Math.Max(max, teamChanges.Max(entry => entry.Tick));
-        }
-
-        if (spawns.Count > 0)
-        {
-            max = Math.Max(max, spawns.Max(entry => entry.Tick));
-        }
-
-        return max;
-    }
-
     private static List<Interval> BuildSpectatorIntervals(int userId, IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges,
-        IReadOnlyList<SpawnEvent> spawns, int demoEndTick)
+        IReadOnlyList<PlaytimeSpawnEvent> spawns, int demoEndTick)
     {
         var events = new List<SpectatorEvent>();
         foreach (var change in teamChanges)
@@ -289,31 +232,11 @@ public class ComputeUserSpectatorMapPlaytimeJob : IJob
         return string.Equals(team, "spectator", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task WriteCsvAsync(string path, IReadOnlyList<MapTotalsRow> rows,
-        CancellationToken cancellationToken)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("map,spectator_seconds,demo_count");
-        foreach (var row in rows)
-        {
-            builder.Append(row.Map.Replace(",", " "));
-            builder.Append(',');
-            builder.Append(row.SpectatorSeconds.ToString("0.##", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(row.DemoCount.ToString(CultureInfo.InvariantCulture));
-            builder.AppendLine();
-        }
-
-        await File.WriteAllTextAsync(path, builder.ToString(), cancellationToken);
-    }
-
     private static string FormatHours(double seconds)
     {
         return HumanTime.FormatHours(seconds);
     }
 
-    private sealed record UserEntry(ulong DemoId, int UserId, string Name);
-    private sealed record SpawnEvent(ulong DemoId, int UserId, int Tick);
     private sealed record Interval(int StartTick, int EndTick);
     private sealed record SpectatorEvent(int Tick, SpectatorEventKind Kind);
     private sealed record MapTotalsRow(string Map, double SpectatorSeconds, int DemoCount);

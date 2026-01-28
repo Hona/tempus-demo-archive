@@ -8,6 +8,9 @@ internal sealed record PlaytimeDeathEvent(ulong DemoId, int UserId, int Tick);
 
 internal sealed record PlaytimeTeamChangeEvent(ulong DemoId, int UserId, int Tick, string Team, bool Disconnect);
 
+internal sealed record PlaytimeUserEntry(ulong DemoId, int? UserId, string Name, string? SteamIdClean, string SteamId,
+    long? SteamId64);
+
 internal sealed record PlaytimePlayerEvent(int Tick, PlaytimeEventKind Kind, string? Class);
 
 internal enum PlaytimeEventKind

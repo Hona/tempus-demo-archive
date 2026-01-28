@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using TempusDemoArchive.Persistence.Models.STVs;
 
@@ -9,58 +8,29 @@ public class ComputeUserMapPlaytimeJob : IJob
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
         await using var db = new ArchiveDbContext();
 
-        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier)
-            .AsNoTracking()
-            .Where(user => user.UserId != null);
-
-        var userEntries = await userQuery
-            .Select(user => new UserEntry(user.DemoId, user.UserId!.Value, user.Name))
-            .ToListAsync(cancellationToken);
-
-        if (userEntries.Count == 0)
+        var resolvedUser = await PlaytimeUserResolver.ResolveAsync(db, playerIdentifier, cancellationToken);
+        if (resolvedUser == null)
         {
             Console.WriteLine("No demos found for that user.");
             return;
         }
 
-        var displayName = userEntries
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.Name))
-            .GroupBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(group => group.Count())
-            .Select(group => group.Key)
-            .FirstOrDefault() ?? playerIdentifier;
+        var displayName = resolvedUser.DisplayName;
+        var demoUserIds = resolvedUser.DemoUserIds;
+        var demoIds = resolvedUser.DemoIds;
+        var metaByDemo = await PlaytimeMetaLoader.LoadByDemoIdAsync(db, demoIds, cancellationToken);
 
-        var demoUserIds = new Dictionary<ulong, HashSet<int>>();
-        foreach (var entry in userEntries)
-        {
-            if (!demoUserIds.TryGetValue(entry.DemoId, out var ids))
-            {
-                ids = new HashSet<int>();
-                demoUserIds[entry.DemoId] = ids;
-            }
-
-            ids.Add(entry.UserId);
-        }
-
-        var demoIds = demoUserIds.Keys.ToList();
-        var demoMeta = await db.Stvs
+        var userQuery = ArchiveQueries.SteamUserQuery(db, playerIdentifier)
             .AsNoTracking()
-            .Where(stv => demoIds.Contains(stv.DemoId))
-            .Select(stv => new PlaytimeDemoMeta(stv.DemoId, stv.Header.Map, string.Empty, stv.IntervalPerTick,
-                stv.Header.Ticks))
-            .ToListAsync(cancellationToken);
-        var metaByDemo = demoMeta.ToDictionary(meta => meta.DemoId, meta => meta);
+            .Where(user => user.UserId != null);
 
         var spawns = await db.StvSpawns
             .AsNoTracking()
@@ -144,7 +114,18 @@ public class ComputeUserMapPlaytimeJob : IJob
 
         var fileName = ArchiveUtils.ToValidFileName($"map_playtime_{playerIdentifier}.csv");
         var filePath = Path.Combine(ArchivePath.TempRoot, fileName);
-        await WriteCsvAsync(filePath, ordered, cancellationToken);
+
+        CsvOutput.Write(filePath,
+            new[] { "map", "solly_seconds", "demo_seconds", "total_seconds", "demo_count" },
+            ordered.Select(row => new string?[]
+            {
+                row.Map,
+                row.SoldierSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.DemoSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.TotalSeconds.ToString("0.##", CultureInfo.InvariantCulture),
+                row.DemoCount.ToString(CultureInfo.InvariantCulture)
+            }),
+            cancellationToken);
 
         Console.WriteLine($"Player: {displayName}");
         Console.WriteLine($"Demos processed: {processedDemos:N0}");
@@ -182,34 +163,11 @@ public class ComputeUserMapPlaytimeJob : IJob
         return true;
     }
 
-    private static async Task WriteCsvAsync(string path, IReadOnlyList<MapTotalsRow> rows,
-        CancellationToken cancellationToken)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("map,solly_seconds,demo_seconds,total_seconds,demo_count");
-        foreach (var row in rows)
-        {
-            builder.Append(row.Map.Replace(",", " "));
-            builder.Append(',');
-            builder.Append(row.SoldierSeconds.ToString("0.##", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(row.DemoSeconds.ToString("0.##", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(row.TotalSeconds.ToString("0.##", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(row.DemoCount.ToString(CultureInfo.InvariantCulture));
-            builder.AppendLine();
-        }
-
-        await File.WriteAllTextAsync(path, builder.ToString(), cancellationToken);
-    }
-
     private static string FormatHours(double seconds)
     {
         return HumanTime.FormatHours(seconds);
     }
 
-    private sealed record UserEntry(ulong DemoId, int UserId, string Name);
     private sealed record MapTotalsRow(string Map, double SoldierSeconds, double DemoSeconds, double TotalSeconds,
         int DemoCount);
 

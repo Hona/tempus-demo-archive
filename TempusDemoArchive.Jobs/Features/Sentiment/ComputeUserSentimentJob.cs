@@ -59,30 +59,16 @@ public class ComputeUserSentimentJob : IJob
     {
         public double Sum { get; set; }
         public int Count { get; set; }
-        private readonly Dictionary<string, int> _nameCounts = new(StringComparer.OrdinalIgnoreCase);
+        private readonly NameCounter _names = new();
 
         public void TrackName(string name)
         {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return;
-            }
-
-            if (_nameCounts.TryGetValue(name, out var current))
-            {
-                _nameCounts[name] = current + 1;
-                return;
-            }
-
-            _nameCounts[name] = 1;
+            _names.Track(name);
         }
 
         public string GetMostCommonName()
         {
-            return _nameCounts
-                .OrderByDescending(entry => entry.Value)
-                .Select(entry => entry.Key)
-                .FirstOrDefault() ?? "unknown";
+            return _names.MostCommonOr("unknown");
         }
     }
 }

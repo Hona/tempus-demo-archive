@@ -48,6 +48,20 @@ internal static class PlaytimeCalculator
         return hadTime;
     }
 
+    public static int GetDemoEndTick(PlaytimeDemoMeta meta,
+        IReadOnlyList<PlaytimeSpawnEvent> spawns,
+        IReadOnlyList<PlaytimeDeathEvent> deaths,
+        IReadOnlyList<PlaytimeTeamChangeEvent> teamChanges)
+    {
+        var demoEndTick = meta.HeaderTicks ?? 0;
+        if (demoEndTick > 0)
+        {
+            return demoEndTick;
+        }
+
+        return Math.Max(GetMaxTick(spawns), Math.Max(GetMaxTick(deaths), GetMaxTick(teamChanges)));
+    }
+
     private static List<PlaytimePlayerEvent> BuildPlayerEvents(int userId,
         IReadOnlyList<PlaytimeSpawnEvent> spawns,
         IReadOnlyList<PlaytimeDeathEvent> deaths,

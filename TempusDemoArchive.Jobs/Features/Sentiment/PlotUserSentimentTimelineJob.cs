@@ -13,12 +13,9 @@ public class PlotUserSentimentTimelineJob : IJob
 
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("Enter steam ID or Steam64:");
-        var playerIdentifier = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(playerIdentifier))
+        var playerIdentifier = JobPrompts.ReadSteamIdentifier();
+        if (playerIdentifier == null)
         {
-            Console.WriteLine("No identifier provided.");
             return;
         }
 
@@ -28,7 +25,7 @@ public class PlotUserSentimentTimelineJob : IJob
         await using var db = new ArchiveDbContext();
         var analyzer = new SentimentIntensityAnalyzer();
 
-        var query = ArchiveQueries.ChatsWithUsers(db)
+        var query = ArchiveQueries.ChatsForUser(db, playerIdentifier)
             .Join(db.Demos.AsNoTracking(),
                 chat => chat.DemoId,
                 demo => demo.Id,
@@ -42,17 +39,8 @@ public class PlotUserSentimentTimelineJob : IJob
                     Timestamp = demo.Date
                 });
 
-        if (long.TryParse(playerIdentifier, out var steam64))
-        {
-            query = query.Where(message => message.SteamId64 == steam64);
-        }
-        else
-        {
-            query = query.Where(message => message.SteamId == playerIdentifier);
-        }
-
         var buckets = new SortedDictionary<DateTime, SentimentAggregate>();
-        var nameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var names = new NameCounter();
         var totalMessages = 0;
 
         await foreach (var message in query.AsAsyncEnumerable().WithCancellation(cancellationToken))
@@ -70,11 +58,7 @@ public class PlotUserSentimentTimelineJob : IJob
             aggregate.Count++;
             totalMessages++;
 
-            if (!string.IsNullOrWhiteSpace(message.Name))
-            {
-                nameCounts.TryGetValue(message.Name, out var count);
-                nameCounts[message.Name] = count + 1;
-            }
+            names.Track(message.Name);
         }
 
         if (totalMessages == 0 || buckets.Count == 0)
@@ -83,10 +67,7 @@ public class PlotUserSentimentTimelineJob : IJob
             return;
         }
 
-        var displayName = nameCounts
-            .OrderByDescending(entry => entry.Value)
-            .Select(entry => entry.Key)
-            .FirstOrDefault() ?? playerIdentifier;
+        var displayName = names.MostCommonOr(playerIdentifier);
 
         var points = buckets.Select(entry => new SentimentPoint(
             entry.Key,
@@ -97,7 +78,15 @@ public class PlotUserSentimentTimelineJob : IJob
         var csvPath = Path.Combine(ArchivePath.TempRoot, fileStem + ".csv");
         var svgPath = Path.Combine(ArchivePath.TempRoot, fileStem + ".svg");
 
-        await WriteCsvAsync(csvPath, points, cancellationToken);
+        CsvOutput.Write(csvPath,
+            new[] { "period_start", "average_sentiment", "message_count" },
+            points.Select(point => new string?[]
+            {
+                point.Period.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                point.AverageSentiment.ToString("0.000", CultureInfo.InvariantCulture),
+                point.MessageCount.ToString(CultureInfo.InvariantCulture)
+            }),
+            cancellationToken);
         WriteSvg(svgPath, points, displayName, bucket, totalMessages);
 
         Console.WriteLine($"Messages: {totalMessages:N0}");
@@ -121,24 +110,6 @@ public class PlotUserSentimentTimelineJob : IJob
         return string.Equals(bucket, "year", StringComparison.OrdinalIgnoreCase)
             ? new DateTime(date.Year, 1, 1)
             : new DateTime(date.Year, date.Month, 1);
-    }
-
-    private static async Task WriteCsvAsync(string path, IReadOnlyList<SentimentPoint> points,
-        CancellationToken cancellationToken)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("period_start,average_sentiment,message_count");
-        foreach (var point in points)
-        {
-            builder.Append(point.Period.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(point.AverageSentiment.ToString("0.000", CultureInfo.InvariantCulture));
-            builder.Append(',');
-            builder.Append(point.MessageCount.ToString(CultureInfo.InvariantCulture));
-            builder.AppendLine();
-        }
-
-        await File.WriteAllTextAsync(path, builder.ToString(), cancellationToken);
     }
 
     private static void WriteSvg(string path, IReadOnlyList<SentimentPoint> points, string displayName, string bucket,
